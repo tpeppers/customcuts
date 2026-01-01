@@ -68,7 +68,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function validateTagName(name) {
-    return /^[A-Za-z\s]+$/.test(name) && name.length <= 128;
+    return /^[A-Za-z0-9\s]+$/.test(name) && name.length <= 128;
   }
 
   function parseTagList(str) {
@@ -87,7 +87,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (!validateTagName(name)) {
-      alert('Cluster name must contain only letters and spaces');
+      alert('Cluster name must contain only letters, numbers, and spaces');
       return;
     }
 

@@ -32,10 +32,36 @@ document.addEventListener('DOMContentLoaded', async () => {
   let allVideos = [];
   let currentEditVideoId = null;
 
+  // Quick tags container
+  const quickTagsContainer = document.getElementById('quick-tags-container');
+
   // Tab elements
   const tabButtons = document.querySelectorAll('.tab-btn');
   const videosTab = document.getElementById('videos-tab');
   const playlistsTab = document.getElementById('playlists-tab');
+  const bookmarksTab = document.getElementById('bookmarks-tab');
+
+  // Bookmarks elements
+  const bookmarksSearchInput = document.getElementById('bookmarks-search-input');
+  const bookmarksSearchClear = document.getElementById('bookmarks-search-clear');
+  const bookmarksBreadcrumb = document.getElementById('bookmarks-breadcrumb');
+  const bookmarksFolderCount = document.getElementById('bookmarks-folder-count');
+  const bookmarksItemCount = document.getElementById('bookmarks-item-count');
+  const bookmarksTaggedCount = document.getElementById('bookmarks-tagged-count');
+  const bookmarksList = document.getElementById('bookmarks-list');
+
+  // Bookmarks state
+  let currentFolderId = '0';
+  let folderPath = [{ id: '0', title: 'Bookmarks' }];
+  let taggedUrls = new Map(); // url -> { id, tags, ratings }
+  let bookmarksSearchTerm = '';
+
+  // Add to playlist modal elements
+  const addToPlaylistModal = document.getElementById('add-to-playlist-modal');
+  const closeAddToPlaylistModalBtn = document.getElementById('close-add-to-playlist-modal');
+  const addToPlaylistTitle = document.getElementById('add-to-playlist-title');
+  const addToPlaylistList = document.getElementById('add-to-playlist-list');
+  let addToPlaylistBookmark = null; // { url, title }
 
   // Playlist elements
   const newPlaylistName = document.getElementById('new-playlist-name');
@@ -67,13 +93,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       tabButtons.forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
 
+      videosTab.classList.remove('active');
+      playlistsTab.classList.remove('active');
+      bookmarksTab.classList.remove('active');
+
       if (tab === 'videos') {
         videosTab.classList.add('active');
-        playlistsTab.classList.remove('active');
-      } else {
-        videosTab.classList.remove('active');
+      } else if (tab === 'playlists') {
         playlistsTab.classList.add('active');
         loadPlaylists();
+      } else if (tab === 'bookmarks') {
+        bookmarksTab.classList.add('active');
+        loadBookmarks();
       }
     });
   });
@@ -372,6 +403,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Render tags
     renderModalTags(videoData.tags || []);
 
+    // Render quick tags (top 10)
+    renderQuickTags();
+
     // Clear add form
     modalTagName.value = '';
     modalIntensity.value = '0';
@@ -484,12 +518,55 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function validateTagName(name) {
-    return /^[A-Za-z\s]+$/.test(name) && name.length <= 128;
+    return /^[A-Za-z0-9\s]+$/.test(name) && name.length <= 128;
+  }
+
+  function getTopTags(videos, limit = 10) {
+    const tagCounts = new Map();
+
+    videos.forEach(video => {
+      video.tags.forEach(tag => {
+        const name = tag.name.toLowerCase();
+        tagCounts.set(name, (tagCounts.get(name) || 0) + 1);
+      });
+    });
+
+    // Sort by count descending, then alphabetically
+    return [...tagCounts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, limit)
+      .map(([name]) => name);
+  }
+
+  function renderQuickTags() {
+    const topTags = getTopTags(allVideos);
+
+    if (topTags.length === 0) {
+      quickTagsContainer.innerHTML = '<span class="empty-text">No tags yet</span>';
+      return;
+    }
+
+    quickTagsContainer.innerHTML = topTags.map(tag =>
+      `<button class="quick-tag-btn" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</button>`
+    ).join('');
+
+    // Add click handlers
+    quickTagsContainer.querySelectorAll('.quick-tag-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const tagName = btn.dataset.tag;
+        await addTag(tagName, 0, null, null);
+      });
+    });
   }
 
   function closeModal() {
     editModal.classList.add('hidden');
     currentEditVideoId = null;
+
+    // Refresh bookmarks view if it's active
+    if (bookmarksTab.classList.contains('active')) {
+      loadBookmarks();
+    }
   }
 
   // ==================== PLAYLIST FUNCTIONS ====================
@@ -695,6 +772,476 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.tabs.create({ url: firstVideo.url });
   }
 
+  // ==================== BOOKMARKS FUNCTIONS ====================
+
+  async function loadTaggedUrls() {
+    const data = await chrome.storage.local.get(null);
+    taggedUrls.clear();
+
+    for (const [key, value] of Object.entries(data)) {
+      if (key.startsWith('video_') && value.tags && value.tags.length > 0) {
+        const url = key.replace('video_', '');
+        taggedUrls.set(url, {
+          id: key,
+          tags: value.tags || [],
+          ratings: value.ratings || {},
+          title: value.title || url
+        });
+      }
+    }
+  }
+
+  async function loadBookmarks() {
+    await loadTaggedUrls();
+    if (bookmarksSearchTerm) {
+      await searchBookmarks(bookmarksSearchTerm);
+    } else {
+      await navigateToFolder(currentFolderId);
+    }
+  }
+
+  async function searchBookmarks(searchTerm) {
+    const term = searchTerm.toLowerCase().trim();
+    if (!term) {
+      await navigateToFolder(currentFolderId);
+      return;
+    }
+
+    try {
+      // Get all bookmarks under the current folder recursively
+      let rootNode;
+      if (currentFolderId === '0') {
+        const tree = await chrome.bookmarks.getTree();
+        rootNode = tree[0];
+      } else {
+        const subtree = await chrome.bookmarks.getSubTree(currentFolderId);
+        rootNode = subtree[0];
+      }
+
+      // Recursively collect all bookmarks (not folders)
+      const allBookmarks = [];
+      function collectBookmarks(node) {
+        if (node.url) {
+          allBookmarks.push(node);
+        }
+        if (node.children) {
+          node.children.forEach(collectBookmarks);
+        }
+      }
+      collectBookmarks(rootNode);
+
+      // Filter by search term (title or tags)
+      const matchingBookmarks = allBookmarks.filter(bookmark => {
+        // Check title match
+        const titleMatch = (bookmark.title || '').toLowerCase().includes(term);
+
+        // Check URL match
+        const urlMatch = (bookmark.url || '').toLowerCase().includes(term);
+
+        // Check tag match
+        const tagged = isUrlTagged(bookmark.url);
+        const tagMatch = tagged && tagged.tags.some(tag =>
+          tag.name.toLowerCase().includes(term)
+        );
+
+        return titleMatch || urlMatch || tagMatch;
+      });
+
+      renderSearchResults(matchingBookmarks, term);
+    } catch (error) {
+      console.error('Error searching bookmarks:', error);
+      bookmarksList.innerHTML = '<p class="empty-state">Error searching bookmarks. Please try again.</p>';
+    }
+  }
+
+  function renderSearchResults(bookmarks, searchTerm) {
+    // Count stats
+    let taggedCount = 0;
+    bookmarks.forEach(bookmark => {
+      if (isUrlTagged(bookmark.url)) {
+        taggedCount++;
+      }
+    });
+
+    // Update stats
+    bookmarksFolderCount.textContent = 'Search results';
+    bookmarksItemCount.textContent = `${bookmarks.length} bookmark${bookmarks.length !== 1 ? 's' : ''}`;
+    bookmarksTaggedCount.textContent = `${taggedCount} tagged`;
+
+    if (bookmarks.length === 0) {
+      bookmarksList.innerHTML = `<p class="empty-state">No bookmarks found matching "${escapeHtml(searchTerm)}"</p>`;
+      return;
+    }
+
+    // Sort alphabetically by title
+    const sortedBookmarks = bookmarks.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+
+    bookmarksList.innerHTML = sortedBookmarks.map(item => {
+      const tagged = isUrlTagged(item.url);
+      const taggedClass = tagged ? 'tagged' : '';
+      const tagBadge = tagged
+        ? `<span class="bookmark-tag-badge">Tagged <span class="tag-count">${tagged.tags.length}</span></span>`
+        : '';
+
+      // Highlight matching tags
+      let tagsList = '';
+      if (tagged) {
+        const matchingTags = tagged.tags.filter(tag =>
+          tag.name.toLowerCase().includes(searchTerm.toLowerCase())
+        );
+        if (matchingTags.length > 0) {
+          tagsList = `<span class="bookmark-matching-tags">${matchingTags.map(t => t.name).join(', ')}</span>`;
+        }
+      }
+
+      // Get favicon URL
+      let faviconHtml;
+      try {
+        const urlObj = new URL(item.url);
+        const faviconUrl = `https://www.google.com/s2/favicons?domain=${urlObj.hostname}&sz=16`;
+        faviconHtml = `<img src="${faviconUrl}" onerror="this.style.display='none'; this.parentNode.innerHTML='🔗';">`;
+      } catch {
+        faviconHtml = '🔗';
+      }
+
+      return `
+        <div class="bookmark-item ${taggedClass}" data-url="${escapeHtml(item.url)}">
+          <div class="bookmark-icon">
+            ${faviconHtml}
+          </div>
+          <div class="bookmark-info">
+            <div class="bookmark-title">${escapeHtml(item.title) || escapeHtml(item.url)}</div>
+            <div class="bookmark-url"><a href="${escapeHtml(item.url)}" target="_blank">${escapeHtml(item.url)}</a></div>
+            ${tagged ? `<div class="bookmark-meta">${tagBadge}${tagsList}</div>` : ''}
+          </div>
+          <div class="bookmark-actions">
+            ${tagged
+              ? `<button class="btn btn-primary bookmark-edit-btn" data-id="${tagged.id}">Edit Tags</button>`
+              : `<button class="btn btn-secondary bookmark-add-btn" data-url="${escapeHtml(item.url)}" data-title="${escapeHtml(item.title || item.url)}">Add Tags</button>`
+            }
+            <button class="btn btn-secondary bookmark-playlist-btn" data-url="${escapeHtml(item.url)}" data-title="${escapeHtml(item.title || item.url)}">Add to playlist...</button>
+            <button class="btn btn-secondary bookmark-open-btn" data-url="${escapeHtml(item.url)}">Open</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // Add event listeners
+    addBookmarkEventListeners();
+  }
+
+  function addBookmarkEventListeners() {
+    bookmarksList.querySelectorAll('.bookmark-edit-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openEditModal(btn.dataset.id);
+      });
+    });
+
+    bookmarksList.querySelectorAll('.bookmark-add-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const url = btn.dataset.url;
+        const title = btn.dataset.title;
+
+        const videoId = 'video_' + url;
+        await chrome.storage.local.set({
+          [videoId]: {
+            title: title,
+            tags: [],
+            ratings: {}
+          }
+        });
+
+        await loadTaggedUrls();
+        if (bookmarksSearchTerm) {
+          await searchBookmarks(bookmarksSearchTerm);
+        } else {
+          await navigateToFolder(currentFolderId);
+        }
+        openEditModal(videoId);
+      });
+    });
+
+    bookmarksList.querySelectorAll('.bookmark-playlist-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openAddToPlaylistModal(btn.dataset.url, btn.dataset.title);
+      });
+    });
+
+    bookmarksList.querySelectorAll('.bookmark-open-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        chrome.tabs.create({ url: btn.dataset.url });
+      });
+    });
+  }
+
+  async function navigateToFolder(folderId) {
+    currentFolderId = folderId;
+
+    try {
+      let children;
+      if (folderId === '0') {
+        // Get root bookmarks (Bookmarks Bar, Other Bookmarks, Mobile Bookmarks)
+        const tree = await chrome.bookmarks.getTree();
+        children = tree[0].children || [];
+      } else {
+        const results = await chrome.bookmarks.getChildren(folderId);
+        children = results || [];
+      }
+
+      renderBookmarks(children);
+      updateBreadcrumb();
+    } catch (error) {
+      console.error('Error loading bookmarks:', error);
+      bookmarksList.innerHTML = '<p class="empty-state">Error loading bookmarks. Please try again.</p>';
+    }
+  }
+
+  function updateBreadcrumb() {
+    bookmarksBreadcrumb.innerHTML = folderPath.map((folder, index) => {
+      const isLast = index === folderPath.length - 1;
+      const separator = index > 0 ? '<span class="breadcrumb-separator">›</span>' : '';
+      const className = isLast ? 'breadcrumb-item current' : 'breadcrumb-item';
+      return `${separator}<span class="${className}" data-id="${folder.id}">${folder.title}</span>`;
+    }).join('');
+
+    // Add click handlers to breadcrumb items (except the last one)
+    bookmarksBreadcrumb.querySelectorAll('.breadcrumb-item:not(.current)').forEach(item => {
+      item.addEventListener('click', () => {
+        const targetId = item.dataset.id;
+        const targetIndex = folderPath.findIndex(f => f.id === targetId);
+        if (targetIndex >= 0) {
+          folderPath = folderPath.slice(0, targetIndex + 1);
+          navigateToFolder(targetId);
+        }
+      });
+    });
+  }
+
+  function isUrlTagged(url) {
+    // Check exact match first
+    if (taggedUrls.has(url)) {
+      return taggedUrls.get(url);
+    }
+    // Check without trailing slash
+    const urlWithoutSlash = url.replace(/\/$/, '');
+    if (taggedUrls.has(urlWithoutSlash)) {
+      return taggedUrls.get(urlWithoutSlash);
+    }
+    // Check with trailing slash
+    const urlWithSlash = url + '/';
+    if (taggedUrls.has(urlWithSlash)) {
+      return taggedUrls.get(urlWithSlash);
+    }
+    return null;
+  }
+
+  function countChildren(node) {
+    let folders = 0;
+    let bookmarks = 0;
+    if (node.children) {
+      for (const child of node.children) {
+        if (child.url) {
+          bookmarks++;
+        } else {
+          folders++;
+        }
+      }
+    }
+    return { folders, bookmarks };
+  }
+
+  function renderBookmarks(items) {
+    // Separate folders and bookmarks
+    const folders = items.filter(item => !item.url);
+    const bookmarks = items.filter(item => item.url);
+
+    // Count stats
+    let taggedCount = 0;
+    bookmarks.forEach(bookmark => {
+      if (isUrlTagged(bookmark.url)) {
+        taggedCount++;
+      }
+    });
+
+    // Update stats
+    bookmarksFolderCount.textContent = `${folders.length} folder${folders.length !== 1 ? 's' : ''}`;
+    bookmarksItemCount.textContent = `${bookmarks.length} bookmark${bookmarks.length !== 1 ? 's' : ''}`;
+    bookmarksTaggedCount.textContent = `${taggedCount} tagged`;
+
+    if (items.length === 0) {
+      bookmarksList.innerHTML = '<p class="empty-state">This folder is empty.</p>';
+      return;
+    }
+
+    // Sort: folders first, then bookmarks alphabetically
+    const sortedItems = [
+      ...folders.sort((a, b) => a.title.localeCompare(b.title)),
+      ...bookmarks.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
+    ];
+
+    bookmarksList.innerHTML = sortedItems.map(item => {
+      if (!item.url) {
+        // Folder
+        const counts = countChildren(item);
+        const countText = [];
+        if (counts.folders > 0) countText.push(`${counts.folders} folder${counts.folders !== 1 ? 's' : ''}`);
+        if (counts.bookmarks > 0) countText.push(`${counts.bookmarks} item${counts.bookmarks !== 1 ? 's' : ''}`);
+
+        return `
+          <div class="bookmark-item folder" data-id="${item.id}" data-title="${escapeHtml(item.title)}">
+            <div class="bookmark-icon folder-icon">📁</div>
+            <div class="bookmark-info">
+              <div class="bookmark-title">${escapeHtml(item.title) || '(Untitled)'}</div>
+              ${countText.length > 0 ? `<span class="folder-children-count">${countText.join(', ')}</span>` : ''}
+            </div>
+            <div class="bookmark-actions">
+              <span class="folder-children-count">Open folder →</span>
+            </div>
+          </div>
+        `;
+      } else {
+        // Bookmark
+        const tagged = isUrlTagged(item.url);
+        const taggedClass = tagged ? 'tagged' : '';
+        const tagBadge = tagged
+          ? `<span class="bookmark-tag-badge">Tagged <span class="tag-count">${tagged.tags.length}</span></span>`
+          : '';
+
+        // Get favicon URL using Google's favicon service as fallback
+        let faviconHtml;
+        try {
+          const urlObj = new URL(item.url);
+          const faviconUrl = `https://www.google.com/s2/favicons?domain=${urlObj.hostname}&sz=16`;
+          faviconHtml = `<img src="${faviconUrl}" onerror="this.style.display='none'; this.parentNode.innerHTML='🔗';">`;
+        } catch {
+          faviconHtml = '🔗';
+        }
+
+        return `
+          <div class="bookmark-item ${taggedClass}" data-url="${escapeHtml(item.url)}">
+            <div class="bookmark-icon">
+              ${faviconHtml}
+            </div>
+            <div class="bookmark-info">
+              <div class="bookmark-title">${escapeHtml(item.title) || escapeHtml(item.url)}</div>
+              <div class="bookmark-url"><a href="${escapeHtml(item.url)}" target="_blank">${escapeHtml(item.url)}</a></div>
+              ${tagged ? `<div class="bookmark-meta">${tagBadge}</div>` : ''}
+            </div>
+            <div class="bookmark-actions">
+              ${tagged
+                ? `<button class="btn btn-primary bookmark-edit-btn" data-id="${tagged.id}">Edit Tags</button>`
+                : `<button class="btn btn-secondary bookmark-add-btn" data-url="${escapeHtml(item.url)}" data-title="${escapeHtml(item.title || item.url)}">Add Tags</button>`
+              }
+              <button class="btn btn-secondary bookmark-playlist-btn" data-url="${escapeHtml(item.url)}" data-title="${escapeHtml(item.title || item.url)}">Add to playlist...</button>
+              <button class="btn btn-secondary bookmark-open-btn" data-url="${escapeHtml(item.url)}">Open</button>
+            </div>
+          </div>
+        `;
+      }
+    }).join('');
+
+    // Add folder click listeners
+    bookmarksList.querySelectorAll('.bookmark-item.folder').forEach(folder => {
+      folder.addEventListener('click', () => {
+        const folderId = folder.dataset.id;
+        const folderTitle = folder.dataset.title;
+        folderPath.push({ id: folderId, title: folderTitle });
+        // Clear search when navigating to a folder
+        bookmarksSearchTerm = '';
+        bookmarksSearchInput.value = '';
+        bookmarksSearchClear.classList.add('hidden');
+        navigateToFolder(folderId);
+      });
+    });
+
+    // Add bookmark action listeners
+    addBookmarkEventListeners();
+  }
+
+  function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  // ==================== ADD TO PLAYLIST FUNCTIONS ====================
+
+  async function openAddToPlaylistModal(url, title) {
+    addToPlaylistBookmark = { url, title };
+    addToPlaylistTitle.textContent = title || url;
+
+    // Load playlists
+    const data = await chrome.storage.local.get('playlists');
+    const playlists = data.playlists || [];
+
+    if (playlists.length === 0) {
+      addToPlaylistList.innerHTML = '<p class="empty-text" style="padding: 16px; text-align: center;">No playlists yet. Create one in the Playlists tab first.</p>';
+    } else {
+      addToPlaylistList.innerHTML = playlists.map((playlist, index) => `
+        <div class="playlist-select-item" data-index="${index}">
+          <div>
+            <div class="playlist-name">${escapeHtml(playlist.name)}</div>
+            <div class="playlist-video-count">${playlist.videos.length} video${playlist.videos.length !== 1 ? 's' : ''}</div>
+          </div>
+          <span class="add-icon">+</span>
+        </div>
+      `).join('');
+
+      // Add click handlers
+      addToPlaylistList.querySelectorAll('.playlist-select-item').forEach(item => {
+        item.addEventListener('click', async () => {
+          const index = parseInt(item.dataset.index);
+          await addBookmarkToPlaylist(index);
+        });
+      });
+    }
+
+    addToPlaylistModal.classList.remove('hidden');
+  }
+
+  function closeAddToPlaylistModal() {
+    addToPlaylistModal.classList.add('hidden');
+    addToPlaylistBookmark = null;
+  }
+
+  async function addBookmarkToPlaylist(playlistIndex) {
+    if (!addToPlaylistBookmark) return;
+
+    const data = await chrome.storage.local.get('playlists');
+    const playlists = data.playlists || [];
+
+    if (playlistIndex >= 0 && playlistIndex < playlists.length) {
+      // Check if already in playlist
+      const playlist = playlists[playlistIndex];
+      const alreadyExists = playlist.videos.some(v => v.url === addToPlaylistBookmark.url);
+
+      if (alreadyExists) {
+        alert(`This bookmark is already in "${playlist.name}"`);
+        return;
+      }
+
+      // Add to end of playlist
+      playlist.videos.push({
+        url: addToPlaylistBookmark.url,
+        title: addToPlaylistBookmark.title
+      });
+
+      await chrome.storage.local.set({ playlists });
+
+      // Show confirmation and close modal
+      const playlistName = playlist.name;
+      closeAddToPlaylistModal();
+
+      // Brief visual feedback (optional: could use a toast notification)
+      alert(`Added to "${playlistName}"`);
+    }
+  }
+
   // ==================== EVENT LISTENERS ====================
 
   // Event listeners
@@ -741,7 +1288,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  modalAddTag.addEventListener('click', async () => {
+  async function submitModalTag() {
     const tagName = modalTagName.value.trim();
     const intensity = parseInt(modalIntensity.value);
     const startTime = parseTime(modalStartTime.value);
@@ -753,7 +1300,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (!validateTagName(tagName)) {
-      alert('Tag name must contain only letters and spaces (max 128 characters)');
+      alert('Tag name must contain only letters, numbers, and spaces (max 128 characters)');
       return;
     }
 
@@ -763,13 +1310,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     modalIntensity.value = '0';
     modalStartTime.value = '';
     modalEndTime.value = '';
-  });
+  }
 
-  document.querySelectorAll('.quick-tag-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const tagName = btn.dataset.tag;
-      await addTag(tagName, 0, null, null);
-    });
+  modalAddTag.addEventListener('click', submitModalTag);
+
+  modalTagName.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitModalTag();
+    }
   });
 
   deleteVideoBtn.addEventListener('click', async () => {
@@ -795,7 +1344,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (!playlistModal.classList.contains('hidden')) {
         closePlaylistModal();
       }
+      if (!addToPlaylistModal.classList.contains('hidden')) {
+        closeAddToPlaylistModal();
+      }
     }
+  });
+
+  // Add to playlist modal event listeners
+  closeAddToPlaylistModalBtn.addEventListener('click', closeAddToPlaylistModal);
+  addToPlaylistModal.addEventListener('click', (e) => {
+    if (e.target === addToPlaylistModal) closeAddToPlaylistModal();
   });
 
   // Playlist event listeners
@@ -836,6 +1394,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Save changes first
     await saveCurrentPlaylist();
     await playPlaylist(currentEditPlaylistId);
+  });
+
+  // Bookmarks search event listeners
+  let bookmarksSearchTimeout;
+  bookmarksSearchInput.addEventListener('input', () => {
+    const value = bookmarksSearchInput.value;
+    bookmarksSearchClear.classList.toggle('hidden', !value);
+
+    // Debounce search
+    clearTimeout(bookmarksSearchTimeout);
+    bookmarksSearchTimeout = setTimeout(() => {
+      bookmarksSearchTerm = value.trim();
+      if (bookmarksSearchTerm) {
+        searchBookmarks(bookmarksSearchTerm);
+      } else {
+        navigateToFolder(currentFolderId);
+      }
+    }, 300);
+  });
+
+  bookmarksSearchClear.addEventListener('click', () => {
+    bookmarksSearchInput.value = '';
+    bookmarksSearchTerm = '';
+    bookmarksSearchClear.classList.add('hidden');
+    navigateToFolder(currentFolderId);
   });
 
   // Initial load

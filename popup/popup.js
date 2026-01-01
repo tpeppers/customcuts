@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const intensitySelect = document.getElementById('intensity-select');
   const addTagBtn = document.getElementById('add-tag-btn');
   const videoTagsList = document.getElementById('video-tags-list');
+  const quickTagsContainer = document.getElementById('quick-tags-container');
   const playbackMode = document.getElementById('playback-mode');
   const tagFilterSection = document.getElementById('tag-filter-section');
   const tagCheckboxes = document.getElementById('tag-checkboxes');
@@ -165,6 +166,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     renderTags(videoData.tags || []);
     updateTagFilter(videoData.tags || [], videoData.selectedTagFilters || []);
+    renderQuickTags();
 
     if (videoData.playbackMode) {
       playbackMode.value = videoData.playbackMode;
@@ -196,7 +198,72 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function validateTagName(name) {
-    return /^[A-Za-z\s]+$/.test(name) && name.length <= 128;
+    return /^[A-Za-z0-9\s]+$/.test(name) && name.length <= 128;
+  }
+
+  async function getTopTags(limit = 10) {
+    const data = await chrome.storage.local.get(null);
+    const tagCounts = new Map();
+
+    for (const [key, value] of Object.entries(data)) {
+      if (key.startsWith('video_') && value.tags && value.tags.length > 0) {
+        value.tags.forEach(tag => {
+          const name = tag.name.toLowerCase();
+          tagCounts.set(name, (tagCounts.get(name) || 0) + 1);
+        });
+      }
+    }
+
+    // Sort by count descending, then alphabetically
+    return [...tagCounts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, limit)
+      .map(([name]) => name);
+  }
+
+  async function renderQuickTags() {
+    const topTags = await getTopTags();
+
+    if (topTags.length === 0) {
+      quickTagsContainer.innerHTML = '<span class="empty-text">No tags yet</span>';
+      return;
+    }
+
+    quickTagsContainer.innerHTML = topTags.map(tag =>
+      `<button class="tag-btn" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</button>`
+    ).join('');
+
+    // Add click handlers
+    quickTagsContainer.querySelectorAll('.tag-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const tagName = btn.dataset.tag;
+
+        const videoId = getVideoId();
+        const data = await chrome.storage.local.get(videoId);
+        const videoData = data[videoId] || {};
+        const tags = videoData.tags || [];
+
+        const response = await chrome.tabs.sendMessage(currentTab.id, { action: 'getCurrentTime' });
+        const currentTime = response ? response.currentTime : 0;
+
+        tags.push({
+          name: tagName,
+          timestamp: currentTime,
+          createdAt: Date.now()
+        });
+
+        await saveVideoData({ tags });
+        renderTags(tags);
+        updateTagFilter(tags);
+      });
+    });
+  }
+
+  function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
   }
 
   async function saveVideoData(updates) {
@@ -368,32 +435,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await saveVideoData({ pendingStartTime: '', pendingEndTime: '' });
   });
 
-  document.querySelectorAll('.tag-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const tagName = btn.dataset.tag;
-      btn.classList.toggle('active');
-
-      const videoId = getVideoId();
-      const data = await chrome.storage.local.get(videoId);
-      const videoData = data[videoId] || {};
-      const tags = videoData.tags || [];
-
-      const response = await chrome.tabs.sendMessage(currentTab.id, { action: 'getCurrentTime' });
-      const currentTime = response ? response.currentTime : 0;
-
-      tags.push({
-        name: tagName,
-        timestamp: currentTime,
-        createdAt: Date.now()
-      });
-
-      await saveVideoData({ tags });
-      renderTags(tags);
-      updateTagFilter(tags);
-    });
-  });
-
-  addTagBtn.addEventListener('click', async () => {
+  async function submitCustomTag() {
     const tagName = customTagInput.value.trim();
     const intensity = parseInt(intensitySelect.value);
 
@@ -403,7 +445,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (!validateTagName(tagName)) {
-      alert('Tag name must contain only letters and spaces (max 128 characters)');
+      alert('Tag name must contain only letters, numbers, and spaces (max 128 characters)');
       return;
     }
 
@@ -441,6 +483,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     startTimeInput.value = '';
     endTimeInput.value = '';
     await saveVideoData({ pendingStartTime: '', pendingEndTime: '' });
+  }
+
+  addTagBtn.addEventListener('click', submitCustomTag);
+
+  customTagInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitCustomTag();
+    }
   });
 
   subtitlesToggle.addEventListener('change', async () => {
