@@ -25,12 +25,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   const managerBtn = document.getElementById('manager-btn');
   const optionsBtn = document.getElementById('options-btn');
 
+  // Queue elements
+  const queueSection = document.getElementById('queue-section');
+  const queueList = document.getElementById('queue-list');
+  const skipQueueBtn = document.getElementById('skip-queue-btn');
+  const clearQueueBtn = document.getElementById('clear-queue-btn');
+
   let currentTab = null;
   let videoInfo = null;
 
   async function init() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     currentTab = tab;
+
+    // Always check and show queue first
+    await loadQueue();
 
     try {
       const response = await chrome.tabs.sendMessage(tab.id, { action: 'getVideoInfo' });
@@ -40,6 +49,83 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) {
       console.log('No video found or content script not loaded');
     }
+  }
+
+  async function loadQueue() {
+    const data = await chrome.storage.local.get('videoQueue');
+    const queue = data.videoQueue || [];
+
+    if (queue.length > 0) {
+      queueSection.classList.remove('hidden');
+      renderQueue(queue);
+    } else {
+      queueSection.classList.add('hidden');
+    }
+  }
+
+  function renderQueue(queue) {
+    if (queue.length === 0) {
+      queueList.innerHTML = '<p class="empty-text">No videos in queue</p>';
+      return;
+    }
+
+    // Find current video in queue
+    const currentUrl = currentTab.url;
+
+    queueList.innerHTML = queue.map((video, index) => {
+      const isCurrent = video.url === currentUrl;
+      return `
+        <div class="queue-item ${isCurrent ? 'current' : ''}" data-index="${index}">
+          <div class="queue-item-info">
+            <div class="queue-item-title">${video.title}</div>
+            <div class="queue-item-position">${index + 1} of ${queue.length}</div>
+          </div>
+          <button class="queue-item-remove" data-index="${index}" title="Remove from queue">&times;</button>
+        </div>
+      `;
+    }).join('');
+
+    queueList.querySelectorAll('.queue-item-remove').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const index = parseInt(btn.dataset.index);
+        await removeFromQueue(index);
+      });
+    });
+  }
+
+  async function removeFromQueue(index) {
+    const data = await chrome.storage.local.get('videoQueue');
+    const queue = data.videoQueue || [];
+
+    queue.splice(index, 1);
+    await chrome.storage.local.set({ videoQueue: queue });
+    await loadQueue();
+  }
+
+  async function skipToNext() {
+    const data = await chrome.storage.local.get('videoQueue');
+    const queue = data.videoQueue || [];
+
+    if (queue.length === 0) return;
+
+    // Find current video index
+    const currentUrl = currentTab.url;
+    const currentIndex = queue.findIndex(v => v.url === currentUrl);
+
+    if (currentIndex >= 0 && currentIndex < queue.length - 1) {
+      // Navigate to next video
+      const nextVideo = queue[currentIndex + 1];
+      chrome.tabs.update(currentTab.id, { url: nextVideo.url });
+    } else if (currentIndex === -1 && queue.length > 0) {
+      // Current video not in queue, go to first
+      chrome.tabs.update(currentTab.id, { url: queue[0].url });
+    }
+  }
+
+  async function clearQueue() {
+    await chrome.storage.local.set({ videoQueue: [] });
+    await loadQueue();
   }
 
   function showVideoControls(info) {
@@ -117,7 +203,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const videoId = getVideoId();
     const data = await chrome.storage.local.get(videoId);
     const videoData = data[videoId] || {};
-    const newData = { ...videoData, ...updates };
+    // Always include the page title so manager can display it
+    const newData = { ...videoData, ...updates, title: currentTab.title };
     await chrome.storage.local.set({ [videoId]: newData });
     return newData;
   }
@@ -450,6 +537,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   optionsBtn.addEventListener('click', () => {
     chrome.runtime.openOptionsPage();
+  });
+
+  // Queue event listeners
+  skipQueueBtn.addEventListener('click', skipToNext);
+
+  clearQueueBtn.addEventListener('click', async () => {
+    if (confirm('Clear the entire video queue?')) {
+      await clearQueue();
+    }
   });
 
   init();

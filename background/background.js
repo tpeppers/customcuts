@@ -37,6 +37,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       break;
 
+    case 'playNextInQueue':
+      if (sender.tab && message.url) {
+        chrome.tabs.update(sender.tab.id, { url: message.url });
+      }
+      break;
+
     case 'getSettings':
       getSettings().then(settings => sendResponse(settings));
       return true;

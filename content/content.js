@@ -15,8 +15,11 @@
 
   function findVideo() {
     const videos = document.querySelectorAll('video');
-    if (videos.length > 0) {
+    if (videos.length > 0 && videos.length < 4) {
       return videos[0];
+    }
+    if (videos.length > 3) {
+      return videos[videos.length -1];
     }
     return null;
   }
@@ -163,7 +166,36 @@
     }
   }
 
-  function handleVideoEnded() {
+  async function handleVideoEnded() {
+    // Check if we're in a playlist queue
+    const data = await chrome.storage.local.get('videoQueue');
+    const queue = data.videoQueue || [];
+
+    if (queue.length > 0) {
+      const currentUrl = window.location.href;
+      const currentIndex = queue.findIndex(v => v.url === currentUrl);
+
+      if (currentIndex >= 0 && currentIndex < queue.length - 1) {
+        // There's a next video in queue
+        const nextVideo = queue[currentIndex + 1];
+        showNotification('Playing next video in queue...');
+
+        // Small delay before navigating
+        setTimeout(() => {
+          chrome.runtime.sendMessage({
+            action: 'playNextInQueue',
+            url: nextVideo.url
+          });
+        }, 1500);
+        return;
+      } else if (currentIndex === queue.length - 1) {
+        // Last video in queue - clear the queue
+        showNotification('Playlist complete!');
+        await chrome.storage.local.set({ videoQueue: [] });
+      }
+    }
+
+    // Fall back to auto-close if enabled
     if (autoCloseEnabled) {
       chrome.runtime.sendMessage({ action: 'closeTab' });
     }

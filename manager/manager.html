@@ -10,22 +10,35 @@
   <div class="container">
     <header>
       <h1>Custom Cuts Video Manager</h1>
-      <p class="subtitle">Manage all your tagged videos</p>
+      <p class="subtitle">Manage all your tagged videos and playlists</p>
     </header>
 
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="videos">Videos</button>
+      <button class="tab-btn" data-tab="playlists">Playlists</button>
+    </nav>
+
+    <!-- Videos Tab -->
+    <div id="videos-tab" class="tab-content active">
     <section class="controls">
       <div class="search-box">
         <input type="text" id="search-input" placeholder="Search videos by URL or tag...">
       </div>
 
-      <div class="filter-sort-row">
-        <div class="filter-group">
-          <label>Filter by tag:</label>
-          <select id="tag-filter">
-            <option value="">All tags</option>
-          </select>
+      <div class="tag-filter-section">
+        <div class="tag-filter-row">
+          <div class="tag-filter-group">
+            <label>Must have tags (AND):</label>
+            <div id="include-tags" class="tag-filter-chips"></div>
+          </div>
+          <div class="tag-filter-group">
+            <label>Exclude tags:</label>
+            <div id="exclude-tags" class="tag-filter-chips"></div>
+          </div>
         </div>
+      </div>
 
+      <div class="filter-sort-row">
         <div class="filter-group">
           <label>Rating by:</label>
           <select id="rating-person-filter">
@@ -70,6 +83,28 @@
     <section id="video-list" class="video-list">
       <p class="empty-state">No tagged videos found. Start tagging videos to see them here!</p>
     </section>
+    </div>
+
+    <!-- Playlists Tab -->
+    <div id="playlists-tab" class="tab-content">
+      <section class="playlist-controls">
+        <div class="create-playlist-section">
+          <h3>Create New Playlist</h3>
+          <div class="create-playlist-form">
+            <input type="text" id="new-playlist-name" placeholder="Playlist name..." maxlength="100">
+            <button id="create-playlist-btn" class="btn btn-primary">Create Playlist</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="stats-bar">
+        <span id="playlist-count">0 playlists</span>
+      </section>
+
+      <section id="playlist-list" class="playlist-list">
+        <p class="empty-state">No playlists yet. Create one above!</p>
+      </section>
+    </div>
 
     <!-- Modal for editing tags -->
     <div id="edit-modal" class="modal hidden">
@@ -155,6 +190,46 @@
         <div class="modal-footer">
           <button id="delete-video-btn" class="btn btn-danger">Delete Video Data</button>
           <button id="open-video-btn" class="btn btn-primary">Open Video</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal for editing playlist -->
+    <div id="playlist-modal" class="modal hidden">
+      <div class="modal-content modal-large">
+        <div class="modal-header">
+          <h2 id="playlist-modal-title">Edit Playlist</h2>
+          <button id="close-playlist-modal" class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="playlist-name-edit">
+            <label>Playlist Name:</label>
+            <input type="text" id="playlist-name-input" maxlength="100">
+          </div>
+
+          <div class="modal-section">
+            <h3>Videos in Playlist (<span id="playlist-video-count">0</span>)</h3>
+            <div id="playlist-videos-list" class="playlist-videos-list">
+              <p class="empty-text">No videos in playlist</p>
+            </div>
+          </div>
+
+          <div class="modal-section">
+            <h3>Add Videos</h3>
+            <div class="add-videos-search">
+              <input type="text" id="playlist-video-search" placeholder="Search videos to add...">
+            </div>
+            <div id="available-videos-list" class="available-videos-list">
+              <p class="empty-text">No videos available</p>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="delete-playlist-btn" class="btn btn-danger">Delete Playlist</button>
+          <div class="modal-footer-right">
+            <button id="play-playlist-btn" class="btn btn-success">Play Playlist</button>
+            <button id="save-playlist-btn" class="btn btn-primary">Save Changes</button>
+          </div>
         </div>
       </div>
     </div>

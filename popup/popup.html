@@ -13,6 +13,19 @@
       <span id="video-status" class="status-badge">No Video</span>
     </header>
 
+    <section id="queue-section" class="section hidden">
+      <div class="queue-header">
+        <h3>Video Queue</h3>
+        <div class="queue-controls">
+          <button id="skip-queue-btn" class="btn btn-small btn-secondary" title="Skip to next">Skip</button>
+          <button id="clear-queue-btn" class="btn btn-small btn-danger" title="Clear queue">Clear</button>
+        </div>
+      </div>
+      <div id="queue-list" class="queue-list">
+        <p class="empty-text">No videos in queue</p>
+      </div>
+    </section>
+
     <section id="no-video-section" class="section">
       <p class="info-text">Navigate to a page with video content to use Custom Cuts.</p>
     </section>
