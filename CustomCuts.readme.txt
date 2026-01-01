@@ -1,0 +1,12 @@
+Chrome Custom Cuts is a video overlay extension that provides various accessibility features for content played in a Chrome web browser:
+
+- Real-time subtitles for arbitrary (currently playing) content
+- The ability to tag bookmarks (and create tags 1-10, "grody"/"spit"/"needles"/"asmr") and optionally mark areas of time in the video related to the tag.
+	- Timed tags can then be skipped or watched exclusively (i.e., play only the section of this video tagged 'ASMR', or skip sections of the video tagged 'spit')
+	- Tags can also be given numerical values to indicate intensity (1-10)
+	- Tag names are strings = "A-Za-z " (whitespace) limited to 128 characters of length
+	- Tags can be managed into clusters 
+		- For example "asmr" & "audio" linked to be treated the same, or someone might combine their tags "spit", "spitting", and "vomit"
+- The ability to close a given tab when the video ends, or at a predetermined time (special tags?).
+- The ability to rate/tag currently playing videos
+- The ability to close-out the current browser tab or fast-forward a configurable amount based on hotkeys, allowing for non-standard inputs

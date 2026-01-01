@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Custom Cuts</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Custom Cuts</h1>
+      <span id="video-status" class="status-badge">No Video</span>
+    </header>
+
+    <section id="no-video-section" class="section">
+      <p class="info-text">Navigate to a page with video content to use Custom Cuts.</p>
+    </section>
+
+    <section id="video-controls" class="section hidden">
+      <div class="control-group">
+        <h3>Subtitles</h3>
+        <label class="toggle">
+          <input type="checkbox" id="subtitles-toggle">
+          <span class="slider"></span>
+          <span class="label-text">Enable Subtitles</span>
+        </label>
+      </div>
+
+      <div class="control-group">
+        <h3>Quick Tags</h3>
+        <div class="tag-buttons">
+          <button class="tag-btn" data-tag="grody">Grody</button>
+          <button class="tag-btn" data-tag="spit">Spit</button>
+          <button class="tag-btn" data-tag="needles">Needles</button>
+          <button class="tag-btn" data-tag="asmr">ASMR</button>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <h3>Tag Time Range</h3>
+        <div class="time-range-controls">
+          <div class="time-input-group">
+            <label>Start</label>
+            <input type="text" id="start-time-input" placeholder="0:00" pattern="[0-9]+:[0-5][0-9]">
+            <button id="mark-start" class="btn btn-secondary btn-small" title="Set to current time">Now</button>
+          </div>
+          <span class="time-separator">to</span>
+          <div class="time-input-group">
+            <label>End</label>
+            <input type="text" id="end-time-input" placeholder="0:00" pattern="[0-9]+:[0-5][0-9]">
+            <button id="mark-end" class="btn btn-secondary btn-small" title="Set to current time">Now</button>
+          </div>
+          <button id="clear-range" class="btn btn-secondary btn-small" title="Clear range">Clear</button>
+        </div>
+        <div class="tag-input-group">
+          <input type="text" id="custom-tag-input" placeholder="Tag name..." maxlength="128" pattern="[A-Za-z\s]+">
+          <select id="intensity-select">
+            <option value="0">No Intensity</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+            <option value="9">9</option>
+            <option value="10">10</option>
+          </select>
+          <button id="add-tag-btn" class="btn btn-primary">Add Tag</button>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <h3>Video Tags</h3>
+        <div id="video-tags-list" class="tags-list">
+          <p class="empty-text">No tags for this video</p>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <h3>Skip/Play Mode</h3>
+        <div class="mode-controls">
+          <select id="playback-mode">
+            <option value="normal">Normal Playback</option>
+            <option value="skip">Skip Tagged Sections</option>
+            <option value="only">Play Only Tagged Sections</option>
+          </select>
+        </div>
+        <div id="tag-filter-section" class="tag-filter-section hidden">
+          <label>Filter by tags (OR):</label>
+          <div id="tag-checkboxes" class="tag-checkboxes">
+            <p class="empty-text">No tags available</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <h3>Auto-Close Tab</h3>
+        <label class="toggle">
+          <input type="checkbox" id="auto-close-toggle">
+          <span class="slider"></span>
+          <span class="label-text">Close when video ends</span>
+        </label>
+        <div class="time-close-group">
+          <label>
+            <input type="checkbox" id="timed-close-toggle">
+            Close at time:
+          </label>
+          <input type="text" id="close-time-input" placeholder="mm:ss" pattern="[0-9]+:[0-5][0-9]">
+        </div>
+      </div>
+
+      <div class="control-group">
+        <h3>Video Rating</h3>
+        <div class="rating-container">
+          <div class="person-selector">
+            <label>Rater:</label>
+            <select id="rating-person">
+              <option value="P1">P1</option>
+              <option value="P2">P2</option>
+              <option value="P3">P3</option>
+              <option value="P4">P4</option>
+            </select>
+          </div>
+          <div class="rating-stars" id="rating-stars">
+            <span class="star" data-rating="1">&#9733;</span>
+            <span class="star" data-rating="2">&#9733;</span>
+            <span class="star" data-rating="3">&#9733;</span>
+            <span class="star" data-rating="4">&#9733;</span>
+            <span class="star" data-rating="5">&#9733;</span>
+          </div>
+          <span id="current-rating-display" class="rating-display"></span>
+        </div>
+        <div id="all-ratings-display" class="all-ratings"></div>
+      </div>
+    </section>
+
+    <footer>
+      <button id="manager-btn" class="btn btn-link">Video Manager</button>
+      <button id="options-btn" class="btn btn-link">Settings</button>
+    </footer>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

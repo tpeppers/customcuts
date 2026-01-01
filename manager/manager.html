@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Custom Cuts - Video Manager</title>
+  <link rel="stylesheet" href="manager.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Custom Cuts Video Manager</h1>
+      <p class="subtitle">Manage all your tagged videos</p>
+    </header>
+
+    <section class="controls">
+      <div class="search-box">
+        <input type="text" id="search-input" placeholder="Search videos by URL or tag...">
+      </div>
+
+      <div class="filter-sort-row">
+        <div class="filter-group">
+          <label>Filter by tag:</label>
+          <select id="tag-filter">
+            <option value="">All tags</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <label>Rating by:</label>
+          <select id="rating-person-filter">
+            <option value="avg">Average</option>
+            <option value="P1">P1</option>
+            <option value="P2">P2</option>
+            <option value="P3">P3</option>
+            <option value="P4">P4</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <label>Min rating:</label>
+          <select id="rating-filter">
+            <option value="">Any</option>
+            <option value="5">5 stars</option>
+            <option value="4">4+</option>
+            <option value="3">3+</option>
+            <option value="2">2+</option>
+            <option value="1">1+</option>
+            <option value="0">Unrated</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <label>Sort by:</label>
+          <select id="sort-by">
+            <option value="recent">Recently Tagged</option>
+            <option value="rating">Highest Rated</option>
+            <option value="tags">Most Tags</option>
+            <option value="alpha">Alphabetical (URL)</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <section class="stats-bar">
+      <span id="video-count">0 videos</span>
+      <span id="tag-count">0 total tags</span>
+    </section>
+
+    <section id="video-list" class="video-list">
+      <p class="empty-state">No tagged videos found. Start tagging videos to see them here!</p>
+    </section>
+
+    <!-- Modal for editing tags -->
+    <div id="edit-modal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Edit Video Tags</h2>
+          <button id="close-modal" class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="video-url-display">
+            <label>Video URL:</label>
+            <a id="modal-video-url" href="#" target="_blank"></a>
+          </div>
+
+          <div class="modal-section">
+            <h3>Ratings</h3>
+            <div class="modal-rating-container">
+              <div class="modal-person-selector">
+                <label>Rate as:</label>
+                <select id="modal-rating-person">
+                  <option value="P1">P1</option>
+                  <option value="P2">P2</option>
+                  <option value="P3">P3</option>
+                  <option value="P4">P4</option>
+                </select>
+              </div>
+              <div class="rating-stars" id="modal-rating-stars">
+                <span class="star" data-rating="1">&#9733;</span>
+                <span class="star" data-rating="2">&#9733;</span>
+                <span class="star" data-rating="3">&#9733;</span>
+                <span class="star" data-rating="4">&#9733;</span>
+                <span class="star" data-rating="5">&#9733;</span>
+              </div>
+            </div>
+            <div id="modal-all-ratings" class="modal-all-ratings"></div>
+          </div>
+
+          <div class="modal-section">
+            <h3>Existing Tags</h3>
+            <div id="modal-tags-list" class="modal-tags-list">
+              <p class="empty-text">No tags</p>
+            </div>
+          </div>
+
+          <div class="modal-section">
+            <h3>Add New Tag</h3>
+            <div class="add-tag-form">
+              <div class="form-row">
+                <input type="text" id="modal-tag-name" placeholder="Tag name..." maxlength="128">
+                <select id="modal-intensity">
+                  <option value="0">No Intensity</option>
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                  <option value="4">4</option>
+                  <option value="5">5</option>
+                  <option value="6">6</option>
+                  <option value="7">7</option>
+                  <option value="8">8</option>
+                  <option value="9">9</option>
+                  <option value="10">10</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <input type="text" id="modal-start-time" placeholder="Start (m:ss)">
+                <span>to</span>
+                <input type="text" id="modal-end-time" placeholder="End (m:ss)">
+              </div>
+              <button id="modal-add-tag" class="btn btn-primary">Add Tag</button>
+            </div>
+          </div>
+
+          <div class="modal-section">
+            <h3>Quick Tags</h3>
+            <div class="quick-tags">
+              <button class="quick-tag-btn" data-tag="grody">Grody</button>
+              <button class="quick-tag-btn" data-tag="spit">Spit</button>
+              <button class="quick-tag-btn" data-tag="needles">Needles</button>
+              <button class="quick-tag-btn" data-tag="asmr">ASMR</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="delete-video-btn" class="btn btn-danger">Delete Video Data</button>
+          <button id="open-video-btn" class="btn btn-primary">Open Video</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="manager.js"></script>
+</body>
+</html>

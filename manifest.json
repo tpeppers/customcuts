@@ -1,0 +1,67 @@
+{
+  "manifest_version": 3,
+  "name": "Custom Cuts",
+  "version": "1.0.0",
+  "description": "Video overlay extension providing accessibility features: subtitles, tagging, time-range skipping, and hotkey controls",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "tabs",
+    "commands"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/content.js"],
+      "css": ["content/content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options/options.html",
+  "commands": {
+    "close-tab": {
+      "suggested_key": {
+        "default": "Alt+Shift+C"
+      },
+      "description": "Close current tab"
+    },
+    "fast-forward-small": {
+      "suggested_key": {
+        "default": "Alt+Shift+Right"
+      },
+      "description": "Fast forward video (small skip)"
+    },
+    "fast-forward-large": {
+      "suggested_key": {
+        "default": "Alt+Shift+L"
+      },
+      "description": "Fast forward video (large skip)"
+    },
+    "rewind-small": {
+      "suggested_key": {
+        "default": "Alt+Shift+Left"
+      },
+      "description": "Rewind video (small skip)"
+    }
+  }
+}
