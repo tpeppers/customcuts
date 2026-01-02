@@ -79,6 +79,7 @@
     <section class="stats-bar">
       <span id="video-count">0 videos</span>
       <span id="tag-count">0 total tags</span>
+      <button id="add-filtered-to-playlist-btn" class="btn btn-secondary stats-btn">Add filtered to playlist...</button>
     </section>
 
     <section id="video-list" class="video-list">
@@ -100,6 +101,7 @@
 
       <section class="stats-bar">
         <span id="playlist-count">0 playlists</span>
+        <button id="queue-all-shuffle-btn" class="btn btn-secondary stats-btn">Queue All Shuffled</button>
       </section>
 
       <section id="playlist-list" class="playlist-list">
@@ -270,7 +272,14 @@
             <div id="add-to-playlist-title" class="bookmark-title-preview"></div>
           </div>
           <div class="modal-section">
-            <h3>Select Playlist</h3>
+            <h3>Create New Playlist</h3>
+            <div class="create-new-playlist-inline">
+              <input type="text" id="add-to-playlist-new-name" placeholder="New playlist name..." maxlength="100">
+              <button id="add-to-playlist-create-btn" class="btn btn-primary">Create & Add</button>
+            </div>
+          </div>
+          <div class="modal-section">
+            <h3>Or Add to Existing Playlist</h3>
             <div id="add-to-playlist-list" class="add-to-playlist-list">
               <p class="empty-text">No playlists available</p>
             </div>

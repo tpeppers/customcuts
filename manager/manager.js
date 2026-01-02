@@ -61,13 +61,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   const closeAddToPlaylistModalBtn = document.getElementById('close-add-to-playlist-modal');
   const addToPlaylistTitle = document.getElementById('add-to-playlist-title');
   const addToPlaylistList = document.getElementById('add-to-playlist-list');
-  let addToPlaylistBookmark = null; // { url, title }
+  const addToPlaylistNewName = document.getElementById('add-to-playlist-new-name');
+  const addToPlaylistCreateBtn = document.getElementById('add-to-playlist-create-btn');
+  const addFilteredToPlaylistBtn = document.getElementById('add-filtered-to-playlist-btn');
+  let addToPlaylistItems = null; // Array of { url, title }
 
   // Playlist elements
   const newPlaylistName = document.getElementById('new-playlist-name');
   const createPlaylistBtn = document.getElementById('create-playlist-btn');
   const playlistCount = document.getElementById('playlist-count');
   const playlistList = document.getElementById('playlist-list');
+  const queueAllShuffleBtn = document.getElementById('queue-all-shuffle-btn');
 
   // Playlist modal elements
   const playlistModal = document.getElementById('playlist-modal');
@@ -140,7 +144,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function calculateAvgRating(ratings) {
-    const values = Object.values(ratings).filter(r => r > 0);
+    // Only P1 and P2 contribute to the average (P3/P4 are personal ratings)
+    const contributingRaters = ['P1', 'P2'];
+    const values = contributingRaters
+      .map(p => ratings[p])
+      .filter(r => r && r > 0);
     if (values.length === 0) return 0;
     return values.reduce((sum, r) => sum + r, 0) / values.length;
   }
@@ -597,6 +605,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         </div>
         <div class="playlist-actions">
           <button class="btn btn-success play-playlist-btn" data-index="${index}">Play</button>
+          <button class="btn btn-secondary shuffle-playlist-btn" data-index="${index}">Shuffle</button>
           <button class="btn btn-primary edit-playlist-btn" data-index="${index}">Edit</button>
         </div>
       </div>
@@ -608,6 +617,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     playlistList.querySelectorAll('.play-playlist-btn').forEach(btn => {
       btn.addEventListener('click', () => playPlaylist(parseInt(btn.dataset.index)));
+    });
+
+    playlistList.querySelectorAll('.shuffle-playlist-btn').forEach(btn => {
+      btn.addEventListener('click', () => playPlaylistShuffled(parseInt(btn.dataset.index)));
     });
   }
 
@@ -763,6 +776,70 @@ document.addEventListener('DOMContentLoaded', async () => {
       url: v.url,
       title: v.title
     }));
+
+    // Save queue to storage
+    await chrome.storage.local.set({ videoQueue: queue });
+
+    // Navigate to first video
+    const firstVideo = queue[0];
+    chrome.tabs.create({ url: firstVideo.url });
+  }
+
+  function shuffleArray(array) {
+    // Fisher-Yates shuffle
+    const shuffled = [...array];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
+  }
+
+  async function playPlaylistShuffled(index) {
+    const playlist = allPlaylists[index];
+    if (!playlist || playlist.videos.length === 0) {
+      alert('This playlist has no videos.');
+      return;
+    }
+
+    // Create shuffled queue from playlist videos
+    const queue = shuffleArray(playlist.videos.map(v => ({
+      url: v.url,
+      title: v.title
+    })));
+
+    // Save queue to storage
+    await chrome.storage.local.set({ videoQueue: queue });
+
+    // Navigate to first video
+    const firstVideo = queue[0];
+    chrome.tabs.create({ url: firstVideo.url });
+  }
+
+  async function queueAllPlaylistsShuffled() {
+    if (allPlaylists.length === 0) {
+      alert('No playlists available.');
+      return;
+    }
+
+    // Gather all videos from all playlists
+    const allVideos = [];
+    allPlaylists.forEach(playlist => {
+      playlist.videos.forEach(v => {
+        allVideos.push({
+          url: v.url,
+          title: v.title
+        });
+      });
+    });
+
+    if (allVideos.length === 0) {
+      alert('No videos in any playlist.');
+      return;
+    }
+
+    // Shuffle all videos
+    const queue = shuffleArray(allVideos);
 
     // Save queue to storage
     await chrome.storage.local.set({ videoQueue: queue });
@@ -966,7 +1043,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     bookmarksList.querySelectorAll('.bookmark-playlist-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        openAddToPlaylistModal(btn.dataset.url, btn.dataset.title);
+        openAddToPlaylistModal({ url: btn.dataset.url, title: btn.dataset.title });
       });
     });
 
@@ -1171,16 +1248,29 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // ==================== ADD TO PLAYLIST FUNCTIONS ====================
 
-  async function openAddToPlaylistModal(url, title) {
-    addToPlaylistBookmark = { url, title };
-    addToPlaylistTitle.textContent = title || url;
+  async function openAddToPlaylistModal(items) {
+    // Accept either a single item { url, title } or an array of items
+    if (!Array.isArray(items)) {
+      items = [items];
+    }
+    addToPlaylistItems = items;
+
+    // Update title based on number of items
+    if (items.length === 1) {
+      addToPlaylistTitle.textContent = items[0].title || items[0].url;
+    } else {
+      addToPlaylistTitle.textContent = `${items.length} videos`;
+    }
+
+    // Clear new playlist name input
+    addToPlaylistNewName.value = '';
 
     // Load playlists
     const data = await chrome.storage.local.get('playlists');
     const playlists = data.playlists || [];
 
     if (playlists.length === 0) {
-      addToPlaylistList.innerHTML = '<p class="empty-text" style="padding: 16px; text-align: center;">No playlists yet. Create one in the Playlists tab first.</p>';
+      addToPlaylistList.innerHTML = '<p class="empty-text" style="padding: 16px; text-align: center;">No existing playlists</p>';
     } else {
       addToPlaylistList.innerHTML = playlists.map((playlist, index) => `
         <div class="playlist-select-item" data-index="${index}">
@@ -1196,7 +1286,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       addToPlaylistList.querySelectorAll('.playlist-select-item').forEach(item => {
         item.addEventListener('click', async () => {
           const index = parseInt(item.dataset.index);
-          await addBookmarkToPlaylist(index);
+          await addItemsToPlaylist(index);
         });
       });
     }
@@ -1206,39 +1296,95 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function closeAddToPlaylistModal() {
     addToPlaylistModal.classList.add('hidden');
-    addToPlaylistBookmark = null;
+    addToPlaylistItems = null;
+    addToPlaylistNewName.value = '';
   }
 
-  async function addBookmarkToPlaylist(playlistIndex) {
-    if (!addToPlaylistBookmark) return;
+  async function addItemsToPlaylist(playlistIndex) {
+    if (!addToPlaylistItems || addToPlaylistItems.length === 0) return;
 
     const data = await chrome.storage.local.get('playlists');
     const playlists = data.playlists || [];
 
     if (playlistIndex >= 0 && playlistIndex < playlists.length) {
-      // Check if already in playlist
       const playlist = playlists[playlistIndex];
-      const alreadyExists = playlist.videos.some(v => v.url === addToPlaylistBookmark.url);
+      const existingUrls = new Set(playlist.videos.map(v => v.url));
 
-      if (alreadyExists) {
-        alert(`This bookmark is already in "${playlist.name}"`);
+      // Filter out items that are already in the playlist
+      const newItems = addToPlaylistItems.filter(item => !existingUrls.has(item.url));
+
+      if (newItems.length === 0) {
+        if (addToPlaylistItems.length === 1) {
+          alert(`This video is already in "${playlist.name}"`);
+        } else {
+          alert(`All ${addToPlaylistItems.length} videos are already in "${playlist.name}"`);
+        }
         return;
       }
 
-      // Add to end of playlist
-      playlist.videos.push({
-        url: addToPlaylistBookmark.url,
-        title: addToPlaylistBookmark.title
+      // Add new items to playlist
+      newItems.forEach(item => {
+        playlist.videos.push({
+          url: item.url,
+          title: item.title
+        });
       });
 
       await chrome.storage.local.set({ playlists });
 
-      // Show confirmation and close modal
-      const playlistName = playlist.name;
       closeAddToPlaylistModal();
 
-      // Brief visual feedback (optional: could use a toast notification)
-      alert(`Added to "${playlistName}"`);
+      // Show confirmation
+      if (addToPlaylistItems.length === 1) {
+        alert(`Added to "${playlist.name}"`);
+      } else if (newItems.length === addToPlaylistItems.length) {
+        alert(`Added ${newItems.length} videos to "${playlist.name}"`);
+      } else {
+        const skipped = addToPlaylistItems.length - newItems.length;
+        alert(`Added ${newItems.length} videos to "${playlist.name}" (${skipped} already existed)`);
+      }
+    }
+  }
+
+  async function createAndAddToNewPlaylist() {
+    const name = addToPlaylistNewName.value.trim();
+    if (!name) {
+      alert('Please enter a playlist name');
+      return;
+    }
+
+    if (!addToPlaylistItems || addToPlaylistItems.length === 0) return;
+
+    const data = await chrome.storage.local.get('playlists');
+    const playlists = data.playlists || [];
+
+    // Create new playlist with the items
+    const newPlaylist = {
+      id: Date.now().toString(),
+      name: name,
+      videos: addToPlaylistItems.map(item => ({
+        url: item.url,
+        title: item.title
+      })),
+      createdAt: Date.now()
+    };
+
+    playlists.push(newPlaylist);
+    await chrome.storage.local.set({ playlists });
+
+    // Update global playlists if on playlists tab
+    allPlaylists = playlists;
+    if (playlistsTab.classList.contains('active')) {
+      renderPlaylists();
+    }
+
+    closeAddToPlaylistModal();
+
+    // Show confirmation
+    if (addToPlaylistItems.length === 1) {
+      alert(`Created "${name}" and added the video`);
+    } else {
+      alert(`Created "${name}" with ${addToPlaylistItems.length} videos`);
     }
   }
 
@@ -1356,6 +1502,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (e.target === addToPlaylistModal) closeAddToPlaylistModal();
   });
 
+  // Create & Add button in add-to-playlist modal
+  addToPlaylistCreateBtn.addEventListener('click', createAndAddToNewPlaylist);
+  addToPlaylistNewName.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      createAndAddToNewPlaylist();
+    }
+  });
+
+  // Add filtered videos to playlist button
+  addFilteredToPlaylistBtn.addEventListener('click', () => {
+    const filtered = filterAndSortVideos();
+    if (filtered.length === 0) {
+      alert('No videos to add. Adjust your filters to include some videos.');
+      return;
+    }
+    const items = filtered.map(v => ({ url: v.url, title: v.title }));
+    openAddToPlaylistModal(items);
+  });
+
   // Playlist event listeners
   createPlaylistBtn.addEventListener('click', async () => {
     const name = newPlaylistName.value.trim();
@@ -1372,6 +1538,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       createPlaylistBtn.click();
     }
   });
+
+  queueAllShuffleBtn.addEventListener('click', queueAllPlaylistsShuffled);
 
   closePlaylistModalBtn.addEventListener('click', closePlaylistModal);
   playlistModal.addEventListener('click', (e) => {

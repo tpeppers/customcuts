@@ -1272,6 +1272,37 @@ h3 {
   opacity: 1;
 }
 
+/* Create new playlist inline form in add-to-playlist modal */
+.create-new-playlist-inline {
+  display: flex;
+  gap: 10px;
+}
+
+.create-new-playlist-inline input {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.create-new-playlist-inline input:focus {
+  outline: none;
+  border-color: #3498db;
+  box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+}
+
+.create-new-playlist-inline .btn {
+  white-space: nowrap;
+}
+
+/* Stats bar button */
+.stats-bar .stats-btn {
+  margin-left: auto;
+  padding: 6px 14px;
+  font-size: 12px;
+}
+
 /* Responsive bookmarks */
 @media (max-width: 768px) {
   .bookmarks-header {
