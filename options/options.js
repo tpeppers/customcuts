@@ -2,7 +2,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const fastForwardSmallInput = document.getElementById('fast-forward-small');
   const fastForwardLargeInput = document.getElementById('fast-forward-large');
   const rewindSmallInput = document.getElementById('rewind-small');
-  const defaultTagsInput = document.getElementById('default-tags');
   const clustersList = document.getElementById('clusters-list');
   const newClusterName = document.getElementById('new-cluster-name');
   const newClusterTags = document.getElementById('new-cluster-tags');
@@ -30,7 +29,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     fastForwardSmallInput.value = settings.fastForwardSmall || 10;
     fastForwardLargeInput.value = settings.fastForwardLarge || 30;
     rewindSmallInput.value = settings.rewindSmall || 10;
-    defaultTagsInput.value = (settings.defaultTags || []).join(', ');
 
     renderClusters();
   }
@@ -173,7 +171,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       fastForwardSmall: 10,
       fastForwardLarge: 30,
       rewindSmall: 10,
-      defaultTags: ['grody', 'spit', 'needles', 'asmr'],
       tagClusters: {}
     };
 
@@ -186,7 +183,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     settings.fastForwardSmall = parseInt(fastForwardSmallInput.value) || 10;
     settings.fastForwardLarge = parseInt(fastForwardLargeInput.value) || 30;
     settings.rewindSmall = parseInt(rewindSmallInput.value) || 10;
-    settings.defaultTags = parseTagList(defaultTagsInput.value);
 
     await chrome.runtime.sendMessage({
       action: 'saveSettings',

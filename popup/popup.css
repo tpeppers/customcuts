@@ -186,6 +186,27 @@ h3 {
   font-size: 12px;
 }
 
+.action-start-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding-top: 8px;
+}
+
+.action-start-status {
+  font-size: 12px;
+  font-family: monospace;
+  color: #666;
+  background: #f0f0f0;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.action-start-status:empty {
+  display: none;
+}
+
 .btn-small {
   padding: 4px 8px;
   font-size: 11px;
@@ -535,6 +556,51 @@ h3 {
 
 .queue-item-remove:hover {
   opacity: 1;
+}
+
+.queue-start-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: white;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.queue-start-label {
+  font-size: 12px;
+  color: #666;
+}
+
+.queue-start-toggle {
+  display: flex;
+  gap: 2px;
+  background: #e0e0e0;
+  border-radius: 4px;
+  padding: 2px;
+}
+
+.queue-start-toggle .toggle-btn {
+  padding: 4px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #666;
+  transition: all 0.2s;
+}
+
+.queue-start-toggle .toggle-btn:hover {
+  color: #333;
+}
+
+.queue-start-toggle .toggle-btn.active {
+  background: #3498db;
+  color: white;
 }
 
 .btn-danger {

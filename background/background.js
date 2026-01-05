@@ -2,7 +2,6 @@ const DEFAULT_SETTINGS = {
   fastForwardSmall: 10,
   fastForwardLarge: 30,
   rewindSmall: 10,
-  defaultTags: ['grody', 'spit', 'needles', 'asmr'],
   tagClusters: {}
 };
 

@@ -21,6 +21,14 @@
           <button id="clear-queue-btn" class="btn btn-small btn-danger" title="Clear queue">Clear</button>
         </div>
       </div>
+      <div class="queue-start-mode">
+        <span class="queue-start-label">Start at:</span>
+        <div class="queue-start-toggle" id="queue-start-toggle">
+          <button class="toggle-btn active" data-mode="B" title="Beginning">B</button>
+          <button class="toggle-btn" data-mode="A1" title="Action Start (start time)">A1</button>
+          <button class="toggle-btn" data-mode="A2" title="Action Start (end time)">A2</button>
+        </div>
+      </div>
       <div id="queue-list" class="queue-list">
         <p class="empty-text">No videos in queue</p>
       </div>
@@ -62,6 +70,10 @@
             <button id="mark-end" class="btn btn-secondary btn-small" title="Set to current time">Now</button>
           </div>
           <button id="clear-range" class="btn btn-secondary btn-small" title="Clear range">Clear</button>
+        </div>
+        <div class="action-start-row">
+          <button id="action-start-btn" class="btn btn-primary" title="Create or extend Action Start tag">Action Start</button>
+          <span id="action-start-status" class="action-start-status"></span>
         </div>
         <div class="tag-input-group">
           <input type="text" id="custom-tag-input" placeholder="Tag name..." maxlength="128" pattern="[A-Za-z\s]+">

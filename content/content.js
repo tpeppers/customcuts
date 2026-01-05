@@ -13,6 +13,10 @@
   let skipRanges = [];
   let onlyRanges = [];
 
+  // Queue start mode seeking state
+  let pendingQueueSeek = null; // { targetTime, retryCount, retryInterval }
+  let queueSeekCheckInterval = null;
+
   function findVideo() {
     const videos = document.querySelectorAll('video');
     if (videos.length > 0 && videos.length < 4) {
@@ -67,6 +71,125 @@
 
     updatePlaybackRanges();
     updateSubtitleVisibility();
+
+    // Check if this is a queued video and handle queue start mode
+    checkQueueStartMode();
+  }
+
+  async function checkQueueStartMode() {
+    const data = await chrome.storage.local.get(['videoQueue', 'queueStartMode']);
+    const queue = data.videoQueue || [];
+    const startMode = data.queueStartMode || 'B';
+
+    // Check if we're in the queue
+    const currentUrl = window.location.href;
+    const isInQueue = queue.some(v => v.url === currentUrl);
+    if (!isInQueue || queue.length === 0) return;
+
+    // For B mode, just auto-play from beginning
+    if (startMode === 'B') {
+      autoPlayWhenReady();
+      return;
+    }
+
+    // Find Action Start tag for A1/A2 modes
+    const actionStartTag = videoTags.find(tag =>
+      tag.name.toLowerCase() === 'action start' && tag.startTime !== undefined
+    );
+
+    if (!actionStartTag) {
+      // No Action Start tag, just auto-play from beginning
+      autoPlayWhenReady();
+      return;
+    }
+
+    // Determine target time based on mode
+    const targetTime = startMode === 'A1' ? actionStartTag.startTime : actionStartTag.endTime;
+
+    // Start attempting to seek (will retry if ads are playing)
+    startQueueSeek(targetTime);
+  }
+
+  function autoPlayWhenReady() {
+    if (!videoElement) return;
+
+    // Try to play immediately
+    const playPromise = videoElement.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(() => {
+        // Auto-play was prevented, try again when user interacts or video is ready
+        videoElement.addEventListener('canplay', () => {
+          videoElement.play().catch(() => {});
+        }, { once: true });
+      });
+    }
+  }
+
+  function startQueueSeek(targetTime) {
+    // Clear any existing seek attempt
+    if (queueSeekCheckInterval) {
+      clearInterval(queueSeekCheckInterval);
+    }
+
+    pendingQueueSeek = {
+      targetTime: targetTime,
+      retryCount: 0,
+      maxRetries: 120 // Try for up to 10 minutes (every 5 seconds)
+    };
+
+    // Try immediately first
+    attemptQueueSeek();
+
+    // Then set up interval to keep trying
+    queueSeekCheckInterval = setInterval(attemptQueueSeek, 5000);
+  }
+
+  function attemptQueueSeek() {
+    if (!pendingQueueSeek || !videoElement) {
+      console.log("Queue seek ended early");
+      return;
+      
+    }
+
+    const { targetTime, retryCount, maxRetries } = pendingQueueSeek;
+
+    // Check if we've exceeded max retries
+    if (retryCount >= maxRetries) {
+      showNotification('Could not skip to Action Start (timeout)');
+      clearQueueSeek();
+      return;
+    }
+
+    pendingQueueSeek.retryCount++;
+
+      console.log("Queue seek going to try");
+    // Check if video is seekable and has enough duration
+    if (videoElement.duration && videoElement.duration >= targetTime && videoElement.seekable.length > 0) {
+      // Check if target time is within seekable range
+      console.log("Queue found video with sufficient duration/seekable...");
+      for (let i = 0; i < videoElement.seekable.length; i++) {
+        if (targetTime >= videoElement.seekable.start(i) && targetTime <= videoElement.seekable.end(i)) {
+          console.log("Queue seeked?");
+          // We can seek!
+          videoElement.currentTime = targetTime;
+          showNotification(`Skipped to Action Start (${formatTime(targetTime)})`);
+          clearQueueSeek();
+          // Auto-play after seeking
+          autoPlayWhenReady();
+          return;
+        }
+      }
+    }
+
+    // If we get here, we couldn't seek yet (likely ads) - will retry on next interval
+  }
+
+  function clearQueueSeek() {
+    if (queueSeekCheckInterval) {
+      clearInterval(queueSeekCheckInterval);
+      queueSeekCheckInterval = null;
+    }
+    pendingQueueSeek = null;
   }
 
   function parseTime(timeStr) {
@@ -289,6 +412,51 @@
     }
     return false;
   });
+
+  // Keyboard hotkey handler
+  document.addEventListener('keydown', (e) => {
+    // Ctrl+Shift+A: Jump to "Action Start" tag
+    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'a') {
+      e.preventDefault();
+      jumpToActionStart();
+    }
+  });
+
+  function jumpToActionStart() {
+    if (!videoElement) {
+      showNotification('No video found.');
+      return;
+    }
+
+    // Find the "Action Start" tag (case-insensitive)
+    const actionStartTag = videoTags.find(tag =>
+      tag.name.toLowerCase() === 'action start' && tag.startTime !== undefined
+    );
+
+    if (actionStartTag) {
+      const currentTime = videoElement.currentTime;
+      const tagStart = actionStartTag.startTime;
+      const tagEnd = actionStartTag.endTime;
+
+      // If at beginning (0) or after the tag's end time, jump to tag start
+      if (currentTime === 0 || currentTime >= tagEnd) {
+        videoElement.currentTime = tagStart;
+        showNotification(`Jumped to Action Start (${formatTime(tagStart)})`);
+      }
+      // If between tag start and end, jump to tag end
+      else if (currentTime >= tagStart && currentTime < tagEnd) {
+        videoElement.currentTime = tagEnd;
+        showNotification(`Jumped to Action End (${formatTime(tagEnd)})`);
+      }
+      // If before tag start, jump to tag start
+      else {
+        videoElement.currentTime = tagStart;
+        showNotification(`Jumped to Action Start (${formatTime(tagStart)})`);
+      }
+    } else {
+      showNotification('No Action Start tag found.');
+    }
+  }
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initVideo);

@@ -116,6 +116,42 @@
           <input type="text" id="bookmarks-search-input" placeholder="Search bookmarks by title or tag...">
           <button id="bookmarks-search-clear" class="search-clear-btn hidden">&times;</button>
         </div>
+
+        <div class="filter-sort-row" style="margin-top: 16px;">
+          <div class="filter-group">
+            <label>Rating by:</label>
+            <select id="bookmarks-rating-person-filter">
+              <option value="avg">Average</option>
+              <option value="P1">P1</option>
+              <option value="P2">P2</option>
+              <option value="P3">P3</option>
+              <option value="P4">P4</option>
+            </select>
+          </div>
+
+          <div class="filter-group">
+            <label>Min rating:</label>
+            <select id="bookmarks-rating-filter">
+              <option value="">Any</option>
+              <option value="5">5 stars</option>
+              <option value="4">4+</option>
+              <option value="3">3+</option>
+              <option value="2">2+</option>
+              <option value="1">1+</option>
+              <option value="0">Unrated only</option>
+              <option value="tagged">Tagged only</option>
+            </select>
+          </div>
+
+          <div class="filter-group">
+            <label>Sort by:</label>
+            <select id="bookmarks-sort-by">
+              <option value="alpha">Alphabetical</option>
+              <option value="rating">Highest Rated</option>
+              <option value="tags">Most Tags</option>
+            </select>
+          </div>
+        </div>
       </section>
 
       <section class="bookmarks-header">

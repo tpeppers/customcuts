@@ -49,6 +49,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const bookmarksItemCount = document.getElementById('bookmarks-item-count');
   const bookmarksTaggedCount = document.getElementById('bookmarks-tagged-count');
   const bookmarksList = document.getElementById('bookmarks-list');
+  const bookmarksRatingPersonFilter = document.getElementById('bookmarks-rating-person-filter');
+  const bookmarksRatingFilter = document.getElementById('bookmarks-rating-filter');
+  const bookmarksSortBy = document.getElementById('bookmarks-sort-by');
 
   // Bookmarks state
   let currentFolderId = '0';
@@ -529,7 +532,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     return /^[A-Za-z0-9\s]+$/.test(name) && name.length <= 128;
   }
 
-  function getTopTags(videos, limit = 10) {
+  function getTopTags(videos, limit = 20) {
     const tagCounts = new Map();
 
     videos.forEach(video => {
@@ -650,6 +653,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     playlistModal.classList.remove('hidden');
   }
 
+  function getActionStartBadge(videoUrl) {
+    // Find the video in allVideos to get its tags
+    const videoData = allVideos.find(v => v.url === videoUrl);
+    if (!videoData || !videoData.tags) {
+      return '<span class="action-badge badge-00" title="No Action Start tag">[00]</span>';
+    }
+
+    // Find Action Start tag
+    const actionStartTag = videoData.tags.find(tag =>
+      tag.name.toLowerCase() === 'action start' && tag.startTime !== undefined
+    );
+
+    if (!actionStartTag) {
+      return '<span class="action-badge badge-00" title="No Action Start tag">[00]</span>';
+    }
+
+    // Check if start and end are the same (0-length)
+    if (actionStartTag.startTime === actionStartTag.endTime) {
+      return '<span class="action-badge badge-a1" title="Action Start (0 length)">[A1]</span>';
+    }
+
+    return '<span class="action-badge badge-a2" title="Action Start (has duration)">[A2]</span>';
+  }
+
   function renderPlaylistVideos() {
     playlistVideoCount.textContent = currentPlaylistVideos.length;
 
@@ -660,9 +687,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     playlistVideosList.innerHTML = currentPlaylistVideos.map((video, index) => `
       <div class="playlist-video-item" data-index="${index}">
+        ${getActionStartBadge(video.url)}
         <div class="video-item-info">
-          <div class="video-item-title">${video.title}</div>
-          <div class="video-item-url">${video.url}</div>
+          <div class="video-item-title"><a href="${escapeHtml(video.url)}" target="_blank">${escapeHtml(video.title)}</a></div>
+          <div class="video-item-url"><a href="${escapeHtml(video.url)}" target="_blank">${escapeHtml(video.url)}</a></div>
         </div>
         <div class="video-item-actions">
           <button class="video-item-btn move" data-dir="up" data-index="${index}" ${index === 0 ? 'disabled' : ''}>↑</button>
@@ -714,13 +742,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     availableVideosList.innerHTML = available.map(video => `
-      <div class="available-video-item" data-url="${video.url}">
+      <div class="available-video-item" data-url="${escapeHtml(video.url)}">
+        ${getActionStartBadge(video.url)}
         <div class="video-item-info">
-          <div class="video-item-title">${video.title}</div>
-          <div class="video-item-url">${video.url}</div>
+          <div class="video-item-title"><a href="${escapeHtml(video.url)}" target="_blank">${escapeHtml(video.title)}</a></div>
+          <div class="video-item-url"><a href="${escapeHtml(video.url)}" target="_blank">${escapeHtml(video.url)}</a></div>
         </div>
         <div class="video-item-actions">
-          <button class="video-item-btn add" data-url="${video.url}" data-title="${video.title}">Add</button>
+          <button class="video-item-btn add" data-url="${escapeHtml(video.url)}" data-title="${escapeHtml(video.title)}">Add</button>
         </div>
       </div>
     `).join('');
@@ -932,7 +961,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function renderSearchResults(bookmarks, searchTerm) {
-    // Count stats
+    // Apply filtering and sorting
+    const filteredBookmarks = filterAndSortBookmarks(bookmarks);
+
+    // Count stats (from original bookmarks, not filtered)
     let taggedCount = 0;
     bookmarks.forEach(bookmark => {
       if (isUrlTagged(bookmark.url)) {
@@ -940,18 +972,27 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
 
-    // Update stats
+    // Update stats - show filtered count if filtering is active
+    const isFiltering = bookmarksRatingFilter.value !== '';
     bookmarksFolderCount.textContent = 'Search results';
-    bookmarksItemCount.textContent = `${bookmarks.length} bookmark${bookmarks.length !== 1 ? 's' : ''}`;
+    if (isFiltering) {
+      bookmarksItemCount.textContent = `${filteredBookmarks.length}/${bookmarks.length} bookmark${bookmarks.length !== 1 ? 's' : ''}`;
+    } else {
+      bookmarksItemCount.textContent = `${bookmarks.length} bookmark${bookmarks.length !== 1 ? 's' : ''}`;
+    }
     bookmarksTaggedCount.textContent = `${taggedCount} tagged`;
 
-    if (bookmarks.length === 0) {
-      bookmarksList.innerHTML = `<p class="empty-state">No bookmarks found matching "${escapeHtml(searchTerm)}"</p>`;
+    if (filteredBookmarks.length === 0) {
+      if (isFiltering && bookmarks.length > 0) {
+        bookmarksList.innerHTML = `<p class="empty-state">No bookmarks matching "${escapeHtml(searchTerm)}" match the current filters.</p>`;
+      } else {
+        bookmarksList.innerHTML = `<p class="empty-state">No bookmarks found matching "${escapeHtml(searchTerm)}"</p>`;
+      }
       return;
     }
 
-    // Sort alphabetically by title
-    const sortedBookmarks = bookmarks.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+    // Bookmarks are already sorted by filterAndSortBookmarks
+    const sortedBookmarks = filteredBookmarks;
 
     bookmarksList.innerHTML = sortedBookmarks.map(item => {
       const tagged = isUrlTagged(item.url);
@@ -1116,6 +1157,77 @@ document.addEventListener('DOMContentLoaded', async () => {
     return null;
   }
 
+  function getBookmarkRatingForFilter(tagged) {
+    if (!tagged || !tagged.ratings) return 0;
+    const personFilter = bookmarksRatingPersonFilter.value;
+    if (personFilter === 'avg') {
+      return calculateAvgRating(tagged.ratings);
+    } else {
+      return tagged.ratings[personFilter] || 0;
+    }
+  }
+
+  function filterAndSortBookmarks(bookmarks) {
+    let filtered = [...bookmarks];
+    const ratingValue = bookmarksRatingFilter.value;
+    const sortValue = bookmarksSortBy.value;
+
+    // Rating filter
+    if (ratingValue) {
+      if (ratingValue === 'tagged') {
+        // Show only tagged bookmarks
+        filtered = filtered.filter(item => isUrlTagged(item.url));
+      } else {
+        const minRating = parseInt(ratingValue);
+        if (minRating === 0) {
+          // Unrated only - tagged but no rating for selected person/avg
+          filtered = filtered.filter(item => {
+            const tagged = isUrlTagged(item.url);
+            return tagged && getBookmarkRatingForFilter(tagged) === 0;
+          });
+        } else {
+          // Min rating - must have at least this rating
+          filtered = filtered.filter(item => {
+            const tagged = isUrlTagged(item.url);
+            return tagged && getBookmarkRatingForFilter(tagged) >= minRating;
+          });
+        }
+      }
+    }
+
+    // Sort
+    switch (sortValue) {
+      case 'rating':
+        filtered.sort((a, b) => {
+          const taggedA = isUrlTagged(a.url);
+          const taggedB = isUrlTagged(b.url);
+          const ratingA = getBookmarkRatingForFilter(taggedA);
+          const ratingB = getBookmarkRatingForFilter(taggedB);
+          // Higher ratings first, then alphabetical
+          if (ratingB !== ratingA) return ratingB - ratingA;
+          return (a.title || '').localeCompare(b.title || '');
+        });
+        break;
+      case 'tags':
+        filtered.sort((a, b) => {
+          const taggedA = isUrlTagged(a.url);
+          const taggedB = isUrlTagged(b.url);
+          const tagsA = taggedA ? taggedA.tags.length : 0;
+          const tagsB = taggedB ? taggedB.tags.length : 0;
+          // More tags first, then alphabetical
+          if (tagsB !== tagsA) return tagsB - tagsA;
+          return (a.title || '').localeCompare(b.title || '');
+        });
+        break;
+      case 'alpha':
+      default:
+        filtered.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+        break;
+    }
+
+    return filtered;
+  }
+
   function countChildren(node) {
     let folders = 0;
     let bookmarks = 0;
@@ -1136,7 +1248,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const folders = items.filter(item => !item.url);
     const bookmarks = items.filter(item => item.url);
 
-    // Count stats
+    // Apply filtering and sorting to bookmarks
+    const filteredBookmarks = filterAndSortBookmarks(bookmarks);
+
+    // Count stats (from original bookmarks, not filtered)
     let taggedCount = 0;
     bookmarks.forEach(bookmark => {
       if (isUrlTagged(bookmark.url)) {
@@ -1144,20 +1259,29 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
 
-    // Update stats
+    // Update stats - show filtered count if filtering is active
+    const isFiltering = bookmarksRatingFilter.value !== '';
     bookmarksFolderCount.textContent = `${folders.length} folder${folders.length !== 1 ? 's' : ''}`;
-    bookmarksItemCount.textContent = `${bookmarks.length} bookmark${bookmarks.length !== 1 ? 's' : ''}`;
+    if (isFiltering) {
+      bookmarksItemCount.textContent = `${filteredBookmarks.length}/${bookmarks.length} bookmark${bookmarks.length !== 1 ? 's' : ''}`;
+    } else {
+      bookmarksItemCount.textContent = `${bookmarks.length} bookmark${bookmarks.length !== 1 ? 's' : ''}`;
+    }
     bookmarksTaggedCount.textContent = `${taggedCount} tagged`;
 
-    if (items.length === 0) {
-      bookmarksList.innerHTML = '<p class="empty-state">This folder is empty.</p>';
+    if (folders.length === 0 && filteredBookmarks.length === 0) {
+      if (isFiltering && bookmarks.length > 0) {
+        bookmarksList.innerHTML = '<p class="empty-state">No bookmarks match the current filters.</p>';
+      } else {
+        bookmarksList.innerHTML = '<p class="empty-state">This folder is empty.</p>';
+      }
       return;
     }
 
-    // Sort: folders first, then bookmarks alphabetically
+    // Sort folders alphabetically, bookmarks are already sorted by filterAndSortBookmarks
     const sortedItems = [
       ...folders.sort((a, b) => a.title.localeCompare(b.title)),
-      ...bookmarks.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
+      ...filteredBookmarks
     ];
 
     bookmarksList.innerHTML = sortedItems.map(item => {
@@ -1587,6 +1711,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     bookmarksSearchTerm = '';
     bookmarksSearchClear.classList.add('hidden');
     navigateToFolder(currentFolderId);
+  });
+
+  // Bookmarks filter/sort event listeners
+  bookmarksRatingPersonFilter.addEventListener('change', () => {
+    if (bookmarksSearchTerm) {
+      searchBookmarks(bookmarksSearchTerm);
+    } else {
+      navigateToFolder(currentFolderId);
+    }
+  });
+
+  bookmarksRatingFilter.addEventListener('change', () => {
+    if (bookmarksSearchTerm) {
+      searchBookmarks(bookmarksSearchTerm);
+    } else {
+      navigateToFolder(currentFolderId);
+    }
+  });
+
+  bookmarksSortBy.addEventListener('change', () => {
+    if (bookmarksSearchTerm) {
+      searchBookmarks(bookmarksSearchTerm);
+    } else {
+      navigateToFolder(currentFolderId);
+    }
   });
 
   // Initial load
