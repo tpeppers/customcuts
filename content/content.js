@@ -12,6 +12,7 @@
   let timedCloseTime = 0;
   let skipRanges = [];
   let onlyRanges = [];
+  let loopRanges = [];
 
   // Queue start mode seeking state
   let pendingQueueSeek = null; // { targetTime, retryCount, retryInterval }
@@ -218,6 +219,7 @@
   function updatePlaybackRanges() {
     skipRanges = [];
     onlyRanges = [];
+    loopRanges = [];
 
     // Filter by selected tags (OR logic) - if no filters selected, use all tags
     const filterSet = playbackTagFilters.length > 0
@@ -235,12 +237,15 @@
           skipRanges.push(range);
         } else if (playbackMode === 'only') {
           onlyRanges.push(range);
+        } else if (playbackMode === 'loop') {
+          loopRanges.push(range);
         }
       }
     });
 
     onlyRanges.sort((a, b) => a.start - b.start);
     skipRanges.sort((a, b) => a.start - b.start);
+    loopRanges.sort((a, b) => a.start - b.start);
   }
 
   function handleTimeUpdate() {
@@ -283,6 +288,32 @@
           } else {
             videoElement.pause();
             showNotification(`No more tagged sections`);
+          }
+        }
+      }
+    } else if (playbackMode === 'loop') {
+      if (loopRanges.length > 0) {
+        let inRange = false;
+        let nextRangeStart = null;
+
+        for (const range of loopRanges) {
+          if (currentTime >= range.start && currentTime < range.end) {
+            inRange = true;
+            break;
+          }
+          if (range.start > currentTime && (nextRangeStart === null || range.start < nextRangeStart)) {
+            nextRangeStart = range.start;
+          }
+        }
+
+        if (!inRange) {
+          if (nextRangeStart !== null) {
+            videoElement.currentTime = nextRangeStart;
+            showNotification(`Jumping to next tagged section`);
+          } else {
+            // Loop back to the first tagged section
+            videoElement.currentTime = loopRanges[0].start;
+            showNotification(`Looping back to first tagged section`);
           }
         }
       }

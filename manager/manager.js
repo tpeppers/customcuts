@@ -2,6 +2,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const searchInput = document.getElementById('search-input');
   const includeTagsContainer = document.getElementById('include-tags');
   const excludeTagsContainer = document.getElementById('exclude-tags');
+  const includeModeToggle = document.getElementById('include-mode-toggle');
   const ratingPersonFilter = document.getElementById('rating-person-filter');
   const ratingFilter = document.getElementById('rating-filter');
   const sortBy = document.getElementById('sort-by');
@@ -12,6 +13,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Tag filter state
   let selectedIncludeTags = new Set();
   let selectedExcludeTags = new Set();
+  let includeTagsMode = 'AND'; // 'AND' or 'OR'
 
   // Modal elements
   const editModal = document.getElementById('edit-modal');
@@ -59,6 +61,44 @@ document.addEventListener('DOMContentLoaded', async () => {
   let taggedUrls = new Map(); // url -> { id, tags, ratings }
   let bookmarksSearchTerm = '';
 
+  // Packs tab elements
+  const packsTab = document.getElementById('packs-tab');
+  const currentPackSelect = document.getElementById('current-pack-select');
+  const newPackNameInput = document.getElementById('new-pack-name');
+  const createPackBtn = document.getElementById('create-pack-btn');
+  const packCount = document.getElementById('pack-count');
+  const packVideosCount = document.getElementById('pack-videos-count');
+  const packsList = document.getElementById('packs-list');
+  const migrateTargetPack = document.getElementById('migrate-target-pack');
+  const migrateMoveBtn = document.getElementById('migrate-move-btn');
+  const migrateCopyBtn = document.getElementById('migrate-copy-btn');
+  const markPackHiddenCheckbox = document.getElementById('mark-pack-hidden');
+  const showHiddenPacksCheckbox = document.getElementById('show-hidden-packs');
+  const hiddenPacksCountSpan = document.getElementById('hidden-packs-count');
+
+  // Packs state
+  let allPacks = ['default'];
+  let currentPack = 'default';
+  let hiddenPacks = []; // Array of hidden pack names
+  let showHiddenPacks = false;
+
+  // Helper function to get packs array from video/playlist data
+  // Supports both old format (pack: string) and new format (packs: array)
+  function getItemPacks(item) {
+    if (item.packs && Array.isArray(item.packs)) {
+      return item.packs;
+    }
+    if (item.pack) {
+      return [item.pack];
+    }
+    return ['default'];
+  }
+
+  // Helper function to check if an item belongs to a specific pack
+  function itemBelongsToPack(item, packName) {
+    return getItemPacks(item).includes(packName);
+  }
+
   // Add to playlist modal elements
   const addToPlaylistModal = document.getElementById('add-to-playlist-modal');
   const closeAddToPlaylistModalBtn = document.getElementById('close-add-to-playlist-modal');
@@ -103,6 +143,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       videosTab.classList.remove('active');
       playlistsTab.classList.remove('active');
       bookmarksTab.classList.remove('active');
+      packsTab.classList.remove('active');
 
       if (tab === 'videos') {
         videosTab.classList.add('active');
@@ -112,16 +153,27 @@ document.addEventListener('DOMContentLoaded', async () => {
       } else if (tab === 'bookmarks') {
         bookmarksTab.classList.add('active');
         loadBookmarks();
+      } else if (tab === 'packs') {
+        packsTab.classList.add('active');
+        loadPacks();
       }
     });
   });
 
   async function loadAllVideos() {
+    // First ensure packs data is loaded
+    await loadPacksData();
+
     const data = await chrome.storage.local.get(null);
     allVideos = [];
 
     for (const [key, value] of Object.entries(data)) {
       if (key.startsWith('video_') && value.tags && value.tags.length > 0) {
+        // Filter by current pack - check if video belongs to current pack
+        if (!itemBelongsToPack(value, currentPack)) {
+          continue;
+        }
+
         const url = key.replace('video_', '');
 
         // Handle ratings - migrate old single rating if needed
@@ -247,11 +299,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     }
 
-    // Include tag filter (AND logic - must have ALL selected tags)
+    // Include tag filter (AND = must have ALL, OR = must have ANY)
     if (selectedIncludeTags.size > 0) {
       filtered = filtered.filter(video => {
         const videoTagNames = new Set(video.tags.map(t => t.name.toLowerCase()));
-        return [...selectedIncludeTags].every(tag => videoTagNames.has(tag));
+        if (includeTagsMode === 'AND') {
+          return [...selectedIncludeTags].every(tag => videoTagNames.has(tag));
+        } else {
+          return [...selectedIncludeTags].some(tag => videoTagNames.has(tag));
+        }
       });
     }
 
@@ -523,7 +579,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     tags.push(newTag);
-    await chrome.storage.local.set({ [currentEditVideoId]: { ...videoData, tags } });
+
+    // Ensure packs is set (for backwards compatibility with existing videos)
+    const packs = getItemPacks(videoData);
+    const updatedData = { ...videoData, tags, packs };
+    delete updatedData.pack; // Remove old pack field
+    await chrome.storage.local.set({ [currentEditVideoId]: updatedData });
     renderModalTags(tags);
     await loadAllVideos();
   }
@@ -583,6 +644,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ==================== PLAYLIST FUNCTIONS ====================
 
   async function loadPlaylists() {
+    await loadPacksData();
     const data = await chrome.storage.local.get('playlists');
     allPlaylists = data.playlists || [];
     renderPlaylists();
@@ -592,24 +654,35 @@ document.addEventListener('DOMContentLoaded', async () => {
     await chrome.storage.local.set({ playlists: allPlaylists });
   }
 
-  function renderPlaylists() {
-    playlistCount.textContent = `${allPlaylists.length} playlist${allPlaylists.length !== 1 ? 's' : ''}`;
+  function getPlaylistsForCurrentPack() {
+    return allPlaylists.filter(p => itemBelongsToPack(p, currentPack));
+  }
 
-    if (allPlaylists.length === 0) {
+  function renderPlaylists() {
+    const packPlaylists = getPlaylistsForCurrentPack();
+    playlistCount.textContent = `${packPlaylists.length} playlist${packPlaylists.length !== 1 ? 's' : ''}`;
+
+    if (packPlaylists.length === 0) {
       playlistList.innerHTML = '<p class="empty-state">No playlists yet. Create one above!</p>';
       return;
     }
 
-    playlistList.innerHTML = allPlaylists.map((playlist, index) => `
-      <div class="playlist-card" data-index="${index}">
+    // Map packPlaylists to include their original index in allPlaylists
+    const playlistsWithIndex = packPlaylists.map(playlist => ({
+      playlist,
+      originalIndex: allPlaylists.indexOf(playlist)
+    }));
+
+    playlistList.innerHTML = playlistsWithIndex.map(({ playlist, originalIndex }) => `
+      <div class="playlist-card" data-index="${originalIndex}">
         <div class="playlist-info">
           <h4>${playlist.name}</h4>
           <span class="playlist-meta">${playlist.videos.length} video${playlist.videos.length !== 1 ? 's' : ''}</span>
         </div>
         <div class="playlist-actions">
-          <button class="btn btn-success play-playlist-btn" data-index="${index}">Play</button>
-          <button class="btn btn-secondary shuffle-playlist-btn" data-index="${index}">Shuffle</button>
-          <button class="btn btn-primary edit-playlist-btn" data-index="${index}">Edit</button>
+          <button class="btn btn-success play-playlist-btn" data-index="${originalIndex}">Play</button>
+          <button class="btn btn-secondary shuffle-playlist-btn" data-index="${originalIndex}">Shuffle</button>
+          <button class="btn btn-primary edit-playlist-btn" data-index="${originalIndex}">Edit</button>
         </div>
       </div>
     `).join('');
@@ -632,7 +705,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       id: Date.now().toString(),
       name: name,
       videos: [],
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      packs: [currentPack]
     };
     allPlaylists.push(playlist);
     await savePlaylists();
@@ -846,14 +920,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   async function queueAllPlaylistsShuffled() {
-    if (allPlaylists.length === 0) {
-      alert('No playlists available.');
+    const packPlaylists = getPlaylistsForCurrentPack();
+    if (packPlaylists.length === 0) {
+      alert('No playlists available in current pack.');
       return;
     }
 
-    // Gather all videos from all playlists
+    // Gather all videos from playlists in current pack
     const allVideos = [];
-    allPlaylists.forEach(playlist => {
+    packPlaylists.forEach(playlist => {
       playlist.videos.forEach(v => {
         allVideos.push({
           url: v.url,
@@ -1067,7 +1142,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           [videoId]: {
             title: title,
             tags: [],
-            ratings: {}
+            ratings: {},
+            packs: [currentPack]
           }
         });
 
@@ -1389,15 +1465,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Clear new playlist name input
     addToPlaylistNewName.value = '';
 
-    // Load playlists
+    // Load playlists and filter by current pack
+    await loadPacksData();
     const data = await chrome.storage.local.get('playlists');
-    const playlists = data.playlists || [];
+    const allPlaylistsData = data.playlists || [];
+    const packPlaylists = allPlaylistsData.filter(p => itemBelongsToPack(p, currentPack));
 
-    if (playlists.length === 0) {
-      addToPlaylistList.innerHTML = '<p class="empty-text" style="padding: 16px; text-align: center;">No existing playlists</p>';
+    if (packPlaylists.length === 0) {
+      addToPlaylistList.innerHTML = '<p class="empty-text" style="padding: 16px; text-align: center;">No existing playlists in current pack</p>';
     } else {
-      addToPlaylistList.innerHTML = playlists.map((playlist, index) => `
-        <div class="playlist-select-item" data-index="${index}">
+      // Map to include original index in allPlaylistsData
+      const playlistsWithIndex = packPlaylists.map(playlist => ({
+        playlist,
+        originalIndex: allPlaylistsData.indexOf(playlist)
+      }));
+
+      addToPlaylistList.innerHTML = playlistsWithIndex.map(({ playlist, originalIndex }) => `
+        <div class="playlist-select-item" data-index="${originalIndex}">
           <div>
             <div class="playlist-name">${escapeHtml(playlist.name)}</div>
             <div class="playlist-video-count">${playlist.videos.length} video${playlist.videos.length !== 1 ? 's' : ''}</div>
@@ -1482,7 +1566,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const data = await chrome.storage.local.get('playlists');
     const playlists = data.playlists || [];
 
-    // Create new playlist with the items
+    // Create new playlist with the items (in current pack)
     const newPlaylist = {
       id: Date.now().toString(),
       name: name,
@@ -1490,7 +1574,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         url: item.url,
         title: item.title
       })),
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      packs: [currentPack]
     };
 
     playlists.push(newPlaylist);
@@ -1512,6 +1597,472 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  // ==================== PACKS FUNCTIONS ====================
+
+  async function loadPacksData() {
+    const data = await chrome.storage.local.get(['packs', 'currentPack', 'hiddenPacks']);
+    allPacks = data.packs || ['default'];
+    currentPack = data.currentPack || 'default';
+    hiddenPacks = data.hiddenPacks || [];
+
+    // Ensure default pack always exists
+    if (!allPacks.includes('default')) {
+      allPacks.unshift('default');
+    }
+
+    // Ensure current pack exists in the list
+    if (!allPacks.includes(currentPack)) {
+      currentPack = 'default';
+      await chrome.storage.local.set({ currentPack: 'default' });
+    }
+
+    // Clean up hiddenPacks - remove any that no longer exist
+    hiddenPacks = hiddenPacks.filter(p => allPacks.includes(p));
+  }
+
+  async function savePacksData() {
+    await chrome.storage.local.set({
+      packs: allPacks,
+      currentPack: currentPack,
+      hiddenPacks: hiddenPacks
+    });
+  }
+
+  async function loadPacks() {
+    await loadPacksData();
+    updatePackSelector();
+    updateMigrateDropdown();
+    updateHiddenPacksUI();
+    renderPacks();
+  }
+
+  function getVisiblePacks() {
+    if (showHiddenPacks) {
+      return allPacks;
+    }
+    return allPacks.filter(p => !hiddenPacks.includes(p));
+  }
+
+  function updatePackSelector() {
+    // Get packs to show in dropdown (always include current pack even if hidden)
+    const visiblePacks = getVisiblePacks();
+    const packsToShow = visiblePacks.includes(currentPack)
+      ? visiblePacks
+      : [currentPack, ...visiblePacks];
+
+    currentPackSelect.innerHTML = packsToShow.map(pack => {
+      const isHidden = hiddenPacks.includes(pack);
+      return `
+        <option value="${escapeHtml(pack)}" ${pack === currentPack ? 'selected' : ''}>
+          ${escapeHtml(pack)}${isHidden ? ' (hidden)' : ''}
+        </option>
+      `;
+    }).join('');
+  }
+
+  function updateHiddenPacksUI() {
+    // Update "Mark as Hidden" checkbox
+    // Disable for default pack - it cannot be hidden
+    const isDefault = currentPack === 'default';
+    markPackHiddenCheckbox.disabled = isDefault;
+    markPackHiddenCheckbox.checked = !isDefault && hiddenPacks.includes(currentPack);
+
+    // Update hidden packs count
+    const hiddenCount = hiddenPacks.length;
+    if (hiddenCount > 0) {
+      hiddenPacksCountSpan.textContent = `${hiddenCount} hidden`;
+    } else {
+      hiddenPacksCountSpan.textContent = '';
+    }
+  }
+
+  async function countVideosInPack(packName) {
+    const data = await chrome.storage.local.get(null);
+    let count = 0;
+    for (const [key, value] of Object.entries(data)) {
+      if (key.startsWith('video_') && value.tags && value.tags.length > 0) {
+        if (itemBelongsToPack(value, packName)) {
+          count++;
+        }
+      }
+    }
+    return count;
+  }
+
+  async function renderPacks() {
+    packCount.textContent = `${allPacks.length} pack${allPacks.length !== 1 ? 's' : ''}`;
+
+    // Count videos and playlists in current pack
+    const currentPackVideoCount = await countVideosInPack(currentPack);
+    const currentPackPlaylistCount = await countPlaylistsInPack(currentPack);
+    packVideosCount.textContent = `${currentPackVideoCount} video${currentPackVideoCount !== 1 ? 's' : ''}, ${currentPackPlaylistCount} playlist${currentPackPlaylistCount !== 1 ? 's' : ''} in current pack`;
+
+    // Get visible packs (always include current pack)
+    const visiblePacks = getVisiblePacks();
+    const packsToRender = visiblePacks.includes(currentPack)
+      ? visiblePacks
+      : [currentPack, ...visiblePacks];
+
+    // Get video and playlist counts for visible packs
+    const packVideoCounts = {};
+    const packPlaylistCounts = {};
+    for (const pack of packsToRender) {
+      packVideoCounts[pack] = await countVideosInPack(pack);
+      packPlaylistCounts[pack] = await countPlaylistsInPack(pack);
+    }
+
+    packsList.innerHTML = packsToRender.map(pack => {
+      const isActive = pack === currentPack;
+      const isDefault = pack === 'default';
+      const isHidden = hiddenPacks.includes(pack);
+      const videoCount = packVideoCounts[pack] || 0;
+      const playlistCount = packPlaylistCounts[pack] || 0;
+
+      return `
+        <div class="pack-card ${isActive ? 'active' : ''} ${isDefault ? 'default-pack' : ''} ${isHidden ? 'hidden-pack' : ''}" data-pack="${escapeHtml(pack)}">
+          <div class="pack-info">
+            <div class="pack-name">
+              ${escapeHtml(pack)}
+              ${isActive ? '<span class="pack-badge active-badge">Active</span>' : ''}
+              ${isDefault ? '<span class="pack-badge default-badge">Default</span>' : ''}
+            </div>
+            <div class="pack-meta">${videoCount} video${videoCount !== 1 ? 's' : ''}, ${playlistCount} playlist${playlistCount !== 1 ? 's' : ''}</div>
+          </div>
+          <div class="pack-actions">
+            ${!isActive ? `<button class="btn btn-primary select-pack-btn" data-pack="${escapeHtml(pack)}">Select</button>` : ''}
+            ${!isDefault ? `<button class="btn btn-secondary rename-pack-btn" data-pack="${escapeHtml(pack)}">Rename</button>` : ''}
+            ${!isDefault && !isActive ? `<button class="btn btn-danger delete-pack-btn" data-pack="${escapeHtml(pack)}">Delete</button>` : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // Add event listeners for pack actions
+    packsList.querySelectorAll('.select-pack-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        await selectPack(btn.dataset.pack);
+      });
+    });
+
+    packsList.querySelectorAll('.rename-pack-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        await renamePack(btn.dataset.pack);
+      });
+    });
+
+    packsList.querySelectorAll('.delete-pack-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        await deletePack(btn.dataset.pack);
+      });
+    });
+  }
+
+  async function selectPack(packName) {
+    currentPack = packName;
+    await savePacksData();
+    updatePackSelector();
+    updateMigrateDropdown();
+    updateHiddenPacksUI();
+    renderPacks();
+
+    // Reload videos with new pack filter
+    await loadAllVideos();
+
+    // Reload playlists if that tab is active
+    if (playlistsTab.classList.contains('active')) {
+      renderPlaylists();
+    }
+  }
+
+  async function createPack(name) {
+    name = name.trim();
+    if (!name) {
+      alert('Please enter a pack name');
+      return;
+    }
+
+    if (allPacks.includes(name.toLowerCase()) || allPacks.some(p => p.toLowerCase() === name.toLowerCase())) {
+      alert('A pack with this name already exists');
+      return;
+    }
+
+    if (!/^[A-Za-z0-9\s\-_]+$/.test(name) || name.length > 50) {
+      alert('Pack name must contain only letters, numbers, spaces, hyphens, and underscores (max 50 characters)');
+      return;
+    }
+
+    allPacks.push(name);
+    await savePacksData();
+    await loadPacks();
+  }
+
+  async function renamePack(oldName) {
+    const newName = prompt(`Rename pack "${oldName}" to:`, oldName);
+    if (!newName || newName.trim() === oldName) {
+      return;
+    }
+
+    const trimmedName = newName.trim();
+    if (allPacks.some(p => p.toLowerCase() === trimmedName.toLowerCase() && p !== oldName)) {
+      alert('A pack with this name already exists');
+      return;
+    }
+
+    if (!/^[A-Za-z0-9\s\-_]+$/.test(trimmedName) || trimmedName.length > 50) {
+      alert('Pack name must contain only letters, numbers, spaces, hyphens, and underscores (max 50 characters)');
+      return;
+    }
+
+    // Update all videos that belong to this pack
+    const data = await chrome.storage.local.get(null);
+    const updates = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (key.startsWith('video_') && value.tags && value.tags.length > 0) {
+        if (itemBelongsToPack(value, oldName)) {
+          let packs = getItemPacks(value).map(p => p === oldName ? trimmedName : p);
+          updates[key] = { ...value, packs };
+          delete updates[key].pack; // Remove old pack field
+        }
+      }
+    }
+    if (Object.keys(updates).length > 0) {
+      await chrome.storage.local.set(updates);
+    }
+
+    // Update all playlists that belong to this pack
+    const playlistData = await chrome.storage.local.get('playlists');
+    const playlists = playlistData.playlists || [];
+    let playlistsUpdated = false;
+    playlists.forEach(playlist => {
+      if (itemBelongsToPack(playlist, oldName)) {
+        playlist.packs = getItemPacks(playlist).map(p => p === oldName ? trimmedName : p);
+        delete playlist.pack; // Remove old pack field
+        playlistsUpdated = true;
+      }
+    });
+    if (playlistsUpdated) {
+      await chrome.storage.local.set({ playlists });
+      allPlaylists = playlists;
+    }
+
+    // Update pack list
+    const index = allPacks.indexOf(oldName);
+    if (index !== -1) {
+      allPacks[index] = trimmedName;
+    }
+
+    // Update current pack if it was renamed
+    if (currentPack === oldName) {
+      currentPack = trimmedName;
+    }
+
+    await savePacksData();
+    await loadPacks();
+    await loadAllVideos();
+  }
+
+  async function countPlaylistsInPack(packName) {
+    const data = await chrome.storage.local.get('playlists');
+    const playlists = data.playlists || [];
+    return playlists.filter(p => itemBelongsToPack(p, packName)).length;
+  }
+
+  function updateMigrateDropdown() {
+    // Populate with visible packs except current pack
+    const visiblePacks = getVisiblePacks();
+    const otherPacks = visiblePacks.filter(p => p !== currentPack);
+
+    migrateTargetPack.innerHTML = `
+      <option value="">Select target pack...</option>
+      ${otherPacks.map(pack => {
+        const isHidden = hiddenPacks.includes(pack);
+        return `
+          <option value="${escapeHtml(pack)}">${escapeHtml(pack)}${isHidden ? ' (hidden)' : ''}</option>
+        `;
+      }).join('')}
+    `;
+
+    // Disable buttons when no selection
+    migrateMoveBtn.disabled = true;
+    migrateCopyBtn.disabled = true;
+  }
+
+  async function migratePackData(targetPack, mode) {
+    if (!targetPack) {
+      alert('Please select a target pack');
+      return;
+    }
+
+    const videoCount = await countVideosInPack(currentPack);
+    const playlistCount = await countPlaylistsInPack(currentPack);
+
+    if (videoCount === 0 && playlistCount === 0) {
+      alert('No data to migrate in current pack');
+      return;
+    }
+
+    const action = mode === 'move' ? 'Move' : 'Copy';
+    const message = `${action} ${videoCount} video(s) and ${playlistCount} playlist(s) from "${currentPack}" to "${targetPack}"?`;
+
+    if (!confirm(message)) {
+      return;
+    }
+
+    // Migrate videos
+    const data = await chrome.storage.local.get(null);
+    const updates = {};
+
+    for (const [key, value] of Object.entries(data)) {
+      if (key.startsWith('video_') && value.tags && value.tags.length > 0) {
+        if (itemBelongsToPack(value, currentPack)) {
+          let packs = getItemPacks(value).slice(); // Clone array
+
+          // Add target pack if not already present
+          if (!packs.includes(targetPack)) {
+            packs.push(targetPack);
+          }
+
+          // Remove current pack if moving
+          if (mode === 'move') {
+            packs = packs.filter(p => p !== currentPack);
+          }
+
+          // Update the video with new packs array
+          updates[key] = { ...value, packs, pack: undefined };
+          delete updates[key].pack; // Remove old pack field
+        }
+      }
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await chrome.storage.local.set(updates);
+    }
+
+    // Migrate playlists
+    const playlistData = await chrome.storage.local.get('playlists');
+    const playlists = playlistData.playlists || [];
+    let playlistsUpdated = false;
+
+    playlists.forEach(playlist => {
+      if (itemBelongsToPack(playlist, currentPack)) {
+        let packs = getItemPacks(playlist).slice(); // Clone array
+
+        // Add target pack if not already present
+        if (!packs.includes(targetPack)) {
+          packs.push(targetPack);
+        }
+
+        // Remove current pack if moving
+        if (mode === 'move') {
+          packs = packs.filter(p => p !== currentPack);
+        }
+
+        // Update the playlist with new packs array
+        playlist.packs = packs;
+        delete playlist.pack; // Remove old pack field
+        playlistsUpdated = true;
+      }
+    });
+
+    if (playlistsUpdated) {
+      await chrome.storage.local.set({ playlists });
+      allPlaylists = playlists;
+    }
+
+    // Reset dropdown
+    migrateTargetPack.value = '';
+    migrateMoveBtn.disabled = true;
+    migrateCopyBtn.disabled = true;
+
+    // Refresh views
+    await loadPacks();
+    await loadAllVideos();
+    if (playlistsTab.classList.contains('active')) {
+      renderPlaylists();
+    }
+
+    alert(`Successfully ${mode === 'move' ? 'moved' : 'copied'} data to "${targetPack}"`);
+  }
+
+  async function deletePack(packName) {
+    const videoCount = await countVideosInPack(packName);
+    const playlistCount = await countPlaylistsInPack(packName);
+    let message = `Are you sure you want to delete the pack "${packName}"?`;
+    if (videoCount > 0 || playlistCount > 0) {
+      message += '\n\nThis pack contains:';
+      if (videoCount > 0) {
+        message += `\n- ${videoCount} video(s)`;
+      }
+      if (playlistCount > 0) {
+        message += `\n- ${playlistCount} playlist(s)`;
+      }
+      message += '\n\nItems only in this pack will be moved to "default".';
+    }
+
+    if (!confirm(message)) {
+      return;
+    }
+
+    // Remove pack from all videos that belong to it
+    const data = await chrome.storage.local.get(null);
+    const updates = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (key.startsWith('video_') && value.tags && value.tags.length > 0) {
+        if (itemBelongsToPack(value, packName)) {
+          let packs = getItemPacks(value).filter(p => p !== packName);
+          // If no packs left, add default
+          if (packs.length === 0) {
+            packs = ['default'];
+          }
+          updates[key] = { ...value, packs };
+          delete updates[key].pack; // Remove old pack field
+        }
+      }
+    }
+    if (Object.keys(updates).length > 0) {
+      await chrome.storage.local.set(updates);
+    }
+
+    // Remove pack from all playlists that belong to it
+    const playlistData = await chrome.storage.local.get('playlists');
+    const playlists = playlistData.playlists || [];
+    let playlistsUpdated = false;
+    playlists.forEach(playlist => {
+      if (itemBelongsToPack(playlist, packName)) {
+        let packs = getItemPacks(playlist).filter(p => p !== packName);
+        // If no packs left, add default
+        if (packs.length === 0) {
+          packs = ['default'];
+        }
+        playlist.packs = packs;
+        delete playlist.pack; // Remove old pack field
+        playlistsUpdated = true;
+      }
+    });
+    if (playlistsUpdated) {
+      await chrome.storage.local.set({ playlists });
+      allPlaylists = playlists;
+    }
+
+    // Remove from pack list
+    const index = allPacks.indexOf(packName);
+    if (index !== -1) {
+      allPacks.splice(index, 1);
+    }
+
+    // Remove from hidden packs if it was hidden
+    hiddenPacks = hiddenPacks.filter(p => p !== packName);
+
+    // If current pack was deleted, switch to default
+    if (currentPack === packName) {
+      currentPack = 'default';
+    }
+
+    await savePacksData();
+    await loadPacks();
+    await loadAllVideos();
+  }
+
   // ==================== EVENT LISTENERS ====================
 
   // Event listeners
@@ -1519,6 +2070,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   ratingPersonFilter.addEventListener('change', renderVideos);
   ratingFilter.addEventListener('change', renderVideos);
   sortBy.addEventListener('change', renderVideos);
+
+  // AND/OR toggle for include tags
+  includeModeToggle.addEventListener('click', () => {
+    includeTagsMode = includeTagsMode === 'AND' ? 'OR' : 'AND';
+    includeModeToggle.textContent = includeTagsMode;
+    includeModeToggle.classList.toggle('or-mode', includeTagsMode === 'OR');
+    renderVideos();
+  });
 
   closeModalBtn.addEventListener('click', closeModal);
   editModal.addEventListener('click', (e) => {
@@ -1736,6 +2295,63 @@ document.addEventListener('DOMContentLoaded', async () => {
     } else {
       navigateToFolder(currentFolderId);
     }
+  });
+
+  // Packs event listeners
+  createPackBtn.addEventListener('click', async () => {
+    await createPack(newPackNameInput.value);
+    newPackNameInput.value = '';
+  });
+
+  newPackNameInput.addEventListener('keydown', async (e) => {
+    if (e.key === 'Enter') {
+      await createPack(newPackNameInput.value);
+      newPackNameInput.value = '';
+    }
+  });
+
+  currentPackSelect.addEventListener('change', async () => {
+    await selectPack(currentPackSelect.value);
+  });
+
+  // Migration event listeners
+  migrateTargetPack.addEventListener('change', () => {
+    const hasSelection = migrateTargetPack.value !== '';
+    migrateMoveBtn.disabled = !hasSelection;
+    migrateCopyBtn.disabled = !hasSelection;
+  });
+
+  migrateMoveBtn.addEventListener('click', async () => {
+    await migratePackData(migrateTargetPack.value, 'move');
+  });
+
+  migrateCopyBtn.addEventListener('click', async () => {
+    await migratePackData(migrateTargetPack.value, 'copy');
+  });
+
+  // Hide/Show packs event listeners
+  markPackHiddenCheckbox.addEventListener('change', async () => {
+    if (markPackHiddenCheckbox.checked) {
+      // Add current pack to hidden list
+      if (!hiddenPacks.includes(currentPack)) {
+        hiddenPacks.push(currentPack);
+      }
+    } else {
+      // Remove current pack from hidden list
+      hiddenPacks = hiddenPacks.filter(p => p !== currentPack);
+    }
+    await savePacksData();
+    updatePackSelector();
+    updateMigrateDropdown();
+    updateHiddenPacksUI();
+    renderPacks();
+  });
+
+  showHiddenPacksCheckbox.addEventListener('change', () => {
+    showHiddenPacks = showHiddenPacksCheckbox.checked;
+    updatePackSelector();
+    updateMigrateDropdown();
+    renderPacks();
   });
 
   // Initial load

@@ -17,6 +17,7 @@
       <button class="tab-btn active" data-tab="videos">Videos</button>
       <button class="tab-btn" data-tab="playlists">Playlists</button>
       <button class="tab-btn" data-tab="bookmarks">Bookmarks</button>
+      <button class="tab-btn" data-tab="packs">Packs</button>
     </nav>
 
     <!-- Videos Tab -->
@@ -29,7 +30,7 @@
       <div class="tag-filter-section">
         <div class="tag-filter-row">
           <div class="tag-filter-group">
-            <label>Must have tags (AND):</label>
+            <label>Must have tags (<span id="include-mode-toggle" class="mode-toggle" title="Click to toggle AND/OR">AND</span>):</label>
             <div id="include-tags" class="tag-filter-chips"></div>
           </div>
           <div class="tag-filter-group">
@@ -167,6 +168,62 @@
 
       <section id="bookmarks-list" class="bookmarks-list">
         <p class="empty-state">Loading bookmarks...</p>
+      </section>
+    </div>
+
+    <!-- Packs Tab -->
+    <div id="packs-tab" class="tab-content">
+      <section class="packs-controls">
+        <div class="current-pack-section">
+          <h3>Current Pack</h3>
+          <p class="pack-description">Select which pack of tags to manage. Videos and tags are organized by pack.</p>
+          <div class="current-pack-selector">
+            <select id="current-pack-select">
+              <option value="default">default</option>
+            </select>
+            <label class="pack-checkbox-label">
+              <input type="checkbox" id="mark-pack-hidden">
+              <span>Mark as Hidden</span>
+            </label>
+          </div>
+          <div class="show-hidden-control">
+            <label class="pack-checkbox-label">
+              <input type="checkbox" id="show-hidden-packs">
+              <span>Show Hidden Packs</span>
+            </label>
+            <span id="hidden-packs-count" class="hidden-count"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="packs-management">
+        <h3>Manage Packs</h3>
+        <div class="pack-actions-row">
+          <div class="create-pack-section">
+            <input type="text" id="new-pack-name" placeholder="New pack name..." maxlength="50">
+            <button id="create-pack-btn" class="btn btn-primary">Create Pack</button>
+          </div>
+        </div>
+        <div class="pack-migrate-section">
+          <label>Migrate current pack's data into:</label>
+          <div class="pack-migrate-controls">
+            <select id="migrate-target-pack">
+              <option value="">Select target pack...</option>
+            </select>
+            <button id="migrate-move-btn" class="btn btn-secondary" disabled>Move</button>
+            <button id="migrate-copy-btn" class="btn btn-secondary" disabled>Add Copy</button>
+          </div>
+          <p class="pack-migrate-hint">Move removes from current pack. Add Copy keeps in both packs.</p>
+        </div>
+      </section>
+
+      <section class="stats-bar">
+        <span id="pack-count">1 pack</span>
+        <span id="pack-videos-count">0 videos in current pack</span>
+      </section>
+
+      <section id="packs-list" class="packs-list">
+        <p class="empty-state">Loading packs...</p>
       </section>
     </div>
 

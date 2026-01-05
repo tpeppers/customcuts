@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const addTagBtn = document.getElementById('add-tag-btn');
   const videoTagsList = document.getElementById('video-tags-list');
   const quickTagsContainer = document.getElementById('quick-tags-container');
+  const lastTagsContainer = document.getElementById('last-tags-container');
   const playbackMode = document.getElementById('playback-mode');
   const tagFilterSection = document.getElementById('tag-filter-section');
   const tagCheckboxes = document.getElementById('tag-checkboxes');
@@ -178,6 +179,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateTagFilter(tags, videoData.selectedTagFilters || []);
     updateActionStartStatus(tags);
     renderQuickTags();
+    renderLastTags();
 
     if (videoData.playbackMode) {
       playbackMode.value = videoData.playbackMode;
@@ -270,6 +272,78 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  async function getLastTags(limit = 10) {
+    const data = await chrome.storage.local.get(null);
+    const allTags = [];
+
+    for (const [key, value] of Object.entries(data)) {
+      if (key.startsWith('video_') && value.tags && value.tags.length > 0) {
+        value.tags.forEach(tag => {
+          if (tag.createdAt) {
+            allTags.push({
+              name: tag.name.toLowerCase(),
+              createdAt: tag.createdAt
+            });
+          }
+        });
+      }
+    }
+
+    // Sort by createdAt descending (most recent first)
+    allTags.sort((a, b) => b.createdAt - a.createdAt);
+
+    // Get unique tag names while preserving order
+    const seen = new Set();
+    const uniqueTags = [];
+    for (const tag of allTags) {
+      if (!seen.has(tag.name)) {
+        seen.add(tag.name);
+        uniqueTags.push(tag.name);
+        if (uniqueTags.length >= limit) break;
+      }
+    }
+
+    return uniqueTags;
+  }
+
+  async function renderLastTags() {
+    const lastTags = await getLastTags();
+
+    if (lastTags.length === 0) {
+      lastTagsContainer.innerHTML = '<span class="empty-text">No recent tags</span>';
+      return;
+    }
+
+    lastTagsContainer.innerHTML = lastTags.map(tag =>
+      `<button class="tag-btn" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</button>`
+    ).join('');
+
+    // Add click handlers
+    lastTagsContainer.querySelectorAll('.tag-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const tagName = btn.dataset.tag;
+
+        const videoId = getVideoId();
+        const data = await chrome.storage.local.get(videoId);
+        const videoData = data[videoId] || {};
+        const tags = videoData.tags || [];
+
+        const response = await chrome.tabs.sendMessage(currentTab.id, { action: 'getCurrentTime' });
+        const currentTime = response ? response.currentTime : 0;
+
+        tags.push({
+          name: tagName,
+          timestamp: currentTime,
+          createdAt: Date.now()
+        });
+
+        await saveVideoData({ tags });
+        renderTags(tags);
+        updateTagFilter(tags);
+      });
+    });
+  }
+
   function escapeHtml(text) {
     if (!text) return '';
     const div = document.createElement('div');
@@ -279,10 +353,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   async function saveVideoData(updates) {
     const videoId = getVideoId();
-    const data = await chrome.storage.local.get(videoId);
+    const data = await chrome.storage.local.get([videoId, 'currentPack']);
     const videoData = data[videoId] || {};
-    // Always include the page title so manager can display it
-    const newData = { ...videoData, ...updates, title: currentTab.title };
+    const currentPack = data.currentPack || 'default';
+
+    // Always include the page title and packs so manager can display/filter it
+    // Get existing packs array (supports both old 'pack' and new 'packs' format)
+    let packs;
+    if (videoData.packs && Array.isArray(videoData.packs)) {
+      packs = videoData.packs;
+    } else if (videoData.pack) {
+      packs = [videoData.pack];
+    } else {
+      packs = [currentPack];
+    }
+
+    const newData = { ...videoData, ...updates, title: currentTab.title, packs };
+    delete newData.pack; // Remove old pack field
     await chrome.storage.local.set({ [videoId]: newData });
     return newData;
   }

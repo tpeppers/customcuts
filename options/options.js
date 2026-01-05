@@ -174,6 +174,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       tagClusters: {}
     };
 
+    // Reset packs to default
+    await chrome.storage.local.set({
+      packs: ['default'],
+      currentPack: 'default'
+    });
+
     await chrome.storage.sync.set({ settings: defaultSettings });
     await loadSettings();
     showSaveStatus('All data cleared!');
