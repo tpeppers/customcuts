@@ -10,6 +10,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const clearRangeBtn = document.getElementById('clear-range');
   const actionStartBtn = document.getElementById('action-start-btn');
   const actionStartStatus = document.getElementById('action-start-status');
+  const actionEndBtn = document.getElementById('action-end-btn');
+  const actionEndStatus = document.getElementById('action-end-status');
   const customTagInput = document.getElementById('custom-tag-input');
   const intensitySelect = document.getElementById('intensity-select');
   const addTagBtn = document.getElementById('add-tag-btn');
@@ -35,6 +37,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const skipQueueBtn = document.getElementById('skip-queue-btn');
   const clearQueueBtn = document.getElementById('clear-queue-btn');
   const queueStartToggle = document.getElementById('queue-start-toggle');
+  const queueEndToggle = document.getElementById('queue-end-toggle');
 
   let currentTab = null;
   let videoInfo = null;
@@ -57,13 +60,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   async function loadQueue() {
-    const data = await chrome.storage.local.get(['videoQueue', 'queueStartMode']);
+    const data = await chrome.storage.local.get(['videoQueue', 'queueStartMode', 'queueEndMode']);
     const queue = data.videoQueue || [];
     const startMode = data.queueStartMode || 'B';
+    const endMode = data.queueEndMode || '0';
 
     // Update toggle buttons to reflect current mode
     queueStartToggle.querySelectorAll('.toggle-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.mode === startMode);
+    });
+    queueEndToggle.querySelectorAll('.toggle-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === endMode);
     });
 
     if (queue.length > 0) {
@@ -178,6 +185,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderTags(tags);
     updateTagFilter(tags, videoData.selectedTagFilters || []);
     updateActionStartStatus(tags);
+    updateActionEndStatus(tags);
     renderQuickTags();
     renderLastTags();
 
@@ -580,6 +588,53 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  // Action End button - creates or extends the "Action End" tag
+  actionEndBtn.addEventListener('click', async () => {
+    const response = await chrome.tabs.sendMessage(currentTab.id, { action: 'getCurrentTime' });
+    if (!response) return;
+
+    const currentTime = response.currentTime;
+    const videoId = getVideoId();
+    const data = await chrome.storage.local.get(videoId);
+    const videoData = data[videoId] || {};
+    const tags = videoData.tags || [];
+
+    // Find existing "Action End" tag (case-insensitive)
+    const existingIndex = tags.findIndex(tag =>
+      tag.name.toLowerCase() === 'action end'
+    );
+
+    if (existingIndex >= 0) {
+      // Update existing tag's end time only
+      tags[existingIndex].endTime = currentTime;
+    } else {
+      // Create new "Action End" tag with start=end=current time
+      tags.push({
+        name: 'Action End',
+        startTime: currentTime,
+        endTime: currentTime,
+        createdAt: Date.now()
+      });
+    }
+
+    await saveVideoData({ tags });
+    renderTags(tags);
+    updateTagFilter(tags);
+    updateActionEndStatus(tags);
+  });
+
+  function updateActionEndStatus(tags) {
+    const actionEndTag = tags.find(tag =>
+      tag.name.toLowerCase() === 'action end'
+    );
+
+    if (actionEndTag && actionEndTag.startTime !== undefined) {
+      actionEndStatus.textContent = `${formatTime(actionEndTag.startTime)} - ${formatTime(actionEndTag.endTime)}`;
+    } else {
+      actionEndStatus.textContent = '';
+    }
+  }
+
   async function submitCustomTag() {
     const tagName = customTagInput.value.trim();
     const intensity = parseInt(intensitySelect.value);
@@ -756,6 +811,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       // Save to storage
       await chrome.storage.local.set({ queueStartMode: mode });
+    });
+  });
+
+  // Queue end mode toggle
+  queueEndToggle.querySelectorAll('.toggle-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const mode = btn.dataset.mode;
+
+      // Update UI
+      queueEndToggle.querySelectorAll('.toggle-btn').forEach(b => {
+        b.classList.toggle('active', b === btn);
+      });
+
+      // Save to storage
+      await chrome.storage.local.set({ queueEndMode: mode });
     });
   });
 

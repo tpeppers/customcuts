@@ -18,6 +18,10 @@
   let pendingQueueSeek = null; // { targetTime, retryCount, retryInterval }
   let queueSeekCheckInterval = null;
 
+  // Queue end mode state
+  let queueEndTime = null; // Time at which video should "end" and move to next
+  let queueEndTriggered = false; // Prevent multiple triggers
+
   function findVideo() {
     const videos = document.querySelectorAll('video');
     if (videos.length > 0 && videos.length < 4) {
@@ -78,14 +82,32 @@
   }
 
   async function checkQueueStartMode() {
-    const data = await chrome.storage.local.get(['videoQueue', 'queueStartMode']);
+    const data = await chrome.storage.local.get(['videoQueue', 'queueStartMode', 'queueEndMode']);
     const queue = data.videoQueue || [];
     const startMode = data.queueStartMode || 'B';
+    const endMode = data.queueEndMode || '0';
 
     // Check if we're in the queue
     const currentUrl = window.location.href;
     const isInQueue = queue.some(v => v.url === currentUrl);
     if (!isInQueue || queue.length === 0) return;
+
+    // Reset end mode state
+    queueEndTime = null;
+    queueEndTriggered = false;
+
+    // Set up queue end mode if not '0' (normal ending)
+    if (endMode !== '0') {
+      // Find Action End tag for E1/E2 modes
+      const actionEndTag = videoTags.find(tag =>
+        tag.name.toLowerCase() === 'action end' && tag.startTime !== undefined
+      );
+
+      if (actionEndTag) {
+        // E1 = Action End start time, E2 = Action End end time
+        queueEndTime = endMode === 'E1' ? actionEndTag.startTime : actionEndTag.endTime;
+      }
+    }
 
     // For B mode, just auto-play from beginning
     if (startMode === 'B') {
@@ -252,6 +274,14 @@
     if (!videoElement) return;
 
     const currentTime = videoElement.currentTime;
+
+    // Check for queue end mode - trigger "video ended" at the Action End point
+    if (queueEndTime !== null && !queueEndTriggered && currentTime >= queueEndTime) {
+      queueEndTriggered = true;
+      showNotification(`Reached Action End (${formatTime(queueEndTime)})`);
+      handleVideoEnded();
+      return;
+    }
 
     if (timedCloseEnabled && timedCloseTime > 0 && currentTime >= timedCloseTime) {
       chrome.runtime.sendMessage({ action: 'closeTab' });
