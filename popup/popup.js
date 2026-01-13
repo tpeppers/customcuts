@@ -392,11 +392,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     videoTagsList.innerHTML = tags.map((tag, index) => `
       <div class="tag-item">
         <span class="tag-name">${tag.name}</span>
-        ${tag.startTime !== undefined ? `<span class="tag-time">${formatTime(tag.startTime)} - ${formatTime(tag.endTime)}</span>` : ''}
+        ${tag.startTime !== undefined ? `<span class="tag-time" data-start="${tag.startTime}" data-end="${tag.endTime}">${formatTime(tag.startTime)} - ${formatTime(tag.endTime)}</span>` : ''}
         ${tag.intensity ? `<span class="tag-intensity">${tag.intensity}/10</span>` : ''}
         <button class="remove-tag" data-index="${index}">&times;</button>
       </div>
     `).join('');
+
+    // Click handler for tag time ranges - seek to start time
+    videoTagsList.querySelectorAll('.tag-time').forEach(timeSpan => {
+      timeSpan.addEventListener('click', async () => {
+        const startTime = parseFloat(timeSpan.dataset.start);
+        if (!isNaN(startTime)) {
+          await chrome.tabs.sendMessage(currentTab.id, { action: 'seekTo', time: startTime });
+        }
+      });
+    });
 
     videoTagsList.querySelectorAll('.remove-tag').forEach(btn => {
       btn.addEventListener('click', async (e) => {

@@ -298,8 +298,14 @@ h3 {
 }
 
 .tag-item .tag-time {
-  color: #666;
+  color: #4a90d9;
   font-family: monospace;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.tag-item .tag-time:hover {
+  color: #2e6bb5;
 }
 
 .tag-item .tag-intensity {
