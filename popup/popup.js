@@ -12,6 +12,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const actionStartStatus = document.getElementById('action-start-status');
   const actionEndBtn = document.getElementById('action-end-btn');
   const actionEndStatus = document.getElementById('action-end-status');
+  const popTagBtn = document.getElementById('pop-tag-btn');
+  const popTagDialog = document.getElementById('pop-tag-dialog');
+  const popTagText = document.getElementById('pop-tag-text');
+  const popTagCancel = document.getElementById('pop-tag-cancel');
+  const popTagSave = document.getElementById('pop-tag-save');
   const customTagInput = document.getElementById('custom-tag-input');
   const intensitySelect = document.getElementById('intensity-select');
   const addTagBtn = document.getElementById('add-tag-btn');
@@ -29,6 +34,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const currentRatingDisplay = document.getElementById('current-rating-display');
   const allRatingsDisplay = document.getElementById('all-ratings-display');
   const feedbackText = document.getElementById('feedback-text');
+  const saveFeedbackBtn = document.getElementById('save-feedback-btn');
+  const feedbackStatus = document.getElementById('feedback-status');
   const managerBtn = document.getElementById('manager-btn');
   const optionsBtn = document.getElementById('options-btn');
 
@@ -395,9 +402,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     videoTagsList.innerHTML = tags.map((tag, index) => `
       <div class="tag-item">
-        <span class="tag-name">${tag.name}</span>
+        <span class="tag-name">${escapeHtml(tag.name)}</span>
         ${tag.startTime !== undefined ? `<span class="tag-time" data-start="${tag.startTime}" data-end="${tag.endTime}">${formatTime(tag.startTime)} - ${formatTime(tag.endTime)}</span>` : ''}
         ${tag.intensity ? `<span class="tag-intensity">${tag.intensity}/10</span>` : ''}
+        ${tag.popText ? `<span class="tag-pop-text" title="${escapeHtml(tag.popText)}">"${escapeHtml(tag.popText.substring(0, 20))}${tag.popText.length > 20 ? '...' : ''}"</span>` : ''}
         <button class="remove-tag" data-index="${index}">&times;</button>
       </div>
     `).join('');
@@ -406,8 +414,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     videoTagsList.querySelectorAll('.tag-time').forEach(timeSpan => {
       timeSpan.addEventListener('click', async () => {
         const startTime = parseFloat(timeSpan.dataset.start);
-        if (!isNaN(startTime)) {
-          await chrome.tabs.sendMessage(currentTab.id, { action: 'seekTo', time: startTime });
+        if (!isNaN(startTime) && currentTab) {
+          try {
+            await chrome.tabs.sendMessage(currentTab.id, { action: 'seekTo', time: startTime });
+          } catch (e) {
+            console.error('Failed to seek video:', e);
+          }
         }
       });
     });
@@ -650,6 +662,64 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  // Pop tag dialog handlers
+  let popTagStartTime = null;
+
+  popTagBtn.addEventListener('click', async () => {
+    const response = await chrome.tabs.sendMessage(currentTab.id, { action: 'getCurrentTime' });
+    if (!response) return;
+
+    popTagStartTime = response.currentTime;
+    popTagText.value = '';
+    popTagDialog.classList.remove('hidden');
+    popTagText.focus();
+  });
+
+  popTagCancel.addEventListener('click', () => {
+    popTagDialog.classList.add('hidden');
+    popTagText.value = '';
+    popTagStartTime = null;
+  });
+
+  popTagSave.addEventListener('click', async () => {
+    const text = popTagText.value.trim();
+    if (!text) {
+      alert('Please enter a message');
+      return;
+    }
+
+    if (popTagStartTime === null) {
+      alert('No time captured. Please try again.');
+      return;
+    }
+
+    const videoId = getVideoId();
+    const data = await chrome.storage.local.get(videoId);
+    const videoData = data[videoId] || {};
+    const tags = videoData.tags || [];
+
+    // Pop tags display for a default duration of 3 seconds
+    const popTagDuration = 3;
+    tags.push({
+      name: 'Pop',
+      startTime: popTagStartTime,
+      endTime: popTagStartTime + popTagDuration,
+      popText: text,
+      createdAt: Date.now()
+    });
+
+    await saveVideoData({ tags });
+    renderTags(tags);
+    updateTagFilter(tags);
+
+    // Notify content script to reload pop tags
+    chrome.tabs.sendMessage(currentTab.id, { action: 'reloadPopTags' });
+
+    popTagDialog.classList.add('hidden');
+    popTagText.value = '';
+    popTagStartTime = null;
+  });
+
   async function submitCustomTag() {
     const tagName = customTagInput.value.trim();
     const intensity = parseInt(intensitySelect.value);
@@ -797,9 +867,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateRatingDisplay(ratings);
   });
 
-  // Save feedback on blur
-  feedbackText.addEventListener('blur', async () => {
+  // Save feedback button
+  saveFeedbackBtn.addEventListener('click', async () => {
     await saveVideoData({ feedback: feedbackText.value });
+    feedbackStatus.textContent = 'Saved!';
+    setTimeout(() => {
+      feedbackStatus.textContent = '';
+    }, 2000);
   });
 
   managerBtn.addEventListener('click', () => {

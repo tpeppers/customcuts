@@ -279,3 +279,169 @@ footer {
   font-style: italic;
   padding: 10px;
 }
+
+/* Display Settings */
+.display-subsection {
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.display-subsection h3 {
+  margin: 0 0 16px 0;
+  font-size: 14px;
+  color: #495057;
+  border-bottom: 1px solid #dee2e6;
+  padding-bottom: 8px;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.setting-row label {
+  min-width: 100px;
+  font-size: 13px;
+  color: #495057;
+}
+
+.setting-row input[type="range"] {
+  flex: 1;
+  max-width: 150px;
+}
+
+.setting-row select {
+  padding: 6px 10px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.setting-row input[type="color"] {
+  width: 40px;
+  height: 30px;
+  padding: 2px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.range-value {
+  font-size: 12px;
+  color: #6c757d;
+  min-width: 40px;
+}
+
+.theme-options {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.theme-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.theme-option input[type="radio"] {
+  margin: 0;
+}
+
+.theme-label {
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: #e9ecef;
+}
+
+.theme-label.theme-ios {
+  background: #007AFF;
+  color: white;
+}
+
+.theme-label.theme-android {
+  background: #4CAF50;
+  color: white;
+}
+
+.custom-options {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #dee2e6;
+}
+
+.custom-options.hidden {
+  display: none;
+}
+
+.preview-box {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #dee2e6;
+}
+
+.preview-box label {
+  display: block;
+  font-size: 12px;
+  color: #6c757d;
+  margin-bottom: 8px;
+}
+
+.subtitle-preview {
+  display: inline-block;
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 18px;
+}
+
+.pop-tag-preview {
+  display: inline-block;
+  background: rgba(0, 0, 0, 0.9);
+  color: white;
+  padding: 16px 32px;
+  border-radius: 12px;
+  font-size: 28px;
+  font-weight: 500;
+}
+
+.sound-settings {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #dee2e6;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
+.sound-options {
+  margin-top: 12px;
+  padding-left: 24px;
+}
+
+.sound-options.hidden {
+  display: none;
+}
+
+.btn-small {
+  padding: 4px 12px;
+  font-size: 12px;
+}

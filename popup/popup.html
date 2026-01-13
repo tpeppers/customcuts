@@ -82,6 +82,15 @@
           <span id="action-start-status" class="action-start-status"></span>
           <button id="action-end-btn" class="btn btn-primary" title="Create or extend Action End tag">Action End</button>
           <span id="action-end-status" class="action-start-status"></span>
+          <button id="pop-tag-btn" class="btn btn-secondary" title="Add a pop-up message at current time">Pop-up Message</button>
+        </div>
+        <div id="pop-tag-dialog" class="pop-tag-dialog hidden">
+          <label for="pop-tag-text">Message to display on video:</label>
+          <textarea id="pop-tag-text" placeholder="Enter pop-up message..."></textarea>
+          <div class="pop-tag-dialog-actions">
+            <button id="pop-tag-cancel" class="btn btn-secondary btn-small">Cancel</button>
+            <button id="pop-tag-save" class="btn btn-primary btn-small">Save Pop Tag</button>
+          </div>
         </div>
         <div class="tag-input-group">
           <input type="text" id="custom-tag-input" placeholder="Tag name..." maxlength="128" pattern="[A-Za-z\s]+">
@@ -168,6 +177,10 @@
         <div class="feedback-container">
           <label for="feedback-text">Feedback:</label>
           <textarea id="feedback-text" placeholder="Add notes, feedback, or comments..."></textarea>
+          <div class="feedback-actions">
+            <button id="save-feedback-btn" class="btn btn-primary btn-small">Save Feedback</button>
+            <span id="feedback-status" class="feedback-status"></span>
+          </div>
         </div>
       </div>
 

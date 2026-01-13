@@ -25,6 +25,85 @@
   // Subtitle manager instance
   let subtitleManager = null;
 
+  // Pop tag state
+  let popTagOverlay = null;
+  let popTags = [];
+  let currentPopTagText = null;
+
+  // Display settings
+  let subtitleStyle = null;
+  let popTagStyle = null;
+  let soundPlayer = null;
+
+  // Sound Player using Web Audio API
+  class SoundPlayer {
+    constructor() {
+      this.audioContext = null;
+    }
+
+    getContext() {
+      if (!this.audioContext) {
+        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      return this.audioContext;
+    }
+
+    playTone(frequency, duration, startDelay = 0) {
+      const ctx = this.getContext();
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(frequency, ctx.currentTime);
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      const startTime = ctx.currentTime + startDelay;
+      gainNode.gain.setValueAtTime(0.3, startTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
+
+      oscillator.start(startTime);
+      oscillator.stop(startTime + duration);
+    }
+
+    playSweep(startFreq, endFreq, duration) {
+      const ctx = this.getContext();
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(startFreq, ctx.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(endFreq, ctx.currentTime + duration);
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
+
+      oscillator.start();
+      oscillator.stop(ctx.currentTime + duration);
+    }
+
+    play(type) {
+      switch(type) {
+        case 'chime':
+          this.playTone(880, 0.12, 0);
+          this.playTone(1318.5, 0.18, 0.08);
+          break;
+        case 'ding':
+          this.playTone(1047, 0.4, 0);
+          break;
+        case 'pop':
+          this.playSweep(200, 800, 0.08);
+          break;
+        case 'bubble':
+          this.playSweep(300, 600, 0.15);
+          this.playTone(600, 0.1, 0.12);
+          break;
+      }
+    }
+  }
+
   // Transcription state
   let transcriptionActive = false;
   let lastVideoTimeUpdate = 0;
@@ -114,7 +193,10 @@
     if (videoElement) {
       setupVideoListeners();
       createSubtitleOverlay();
+      createPopTagOverlay();
       loadVideoSettings();
+      loadPopTags();
+      loadDisplaySettings();
     }
   }
 
@@ -359,18 +441,26 @@
   }
 
   function handleFullscreenChange() {
-    if (!subtitleOverlay) return;
-
     const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
 
     if (fullscreenElement) {
-      // Entering fullscreen - move overlay into fullscreen element
-      fullscreenElement.appendChild(subtitleOverlay);
-      console.log('[Subtitles] Moved overlay to fullscreen element');
+      // Entering fullscreen - move overlays into fullscreen element
+      if (subtitleOverlay) {
+        fullscreenElement.appendChild(subtitleOverlay);
+        console.log('[Subtitles] Moved overlay to fullscreen element');
+      }
+      if (popTagOverlay) {
+        fullscreenElement.appendChild(popTagOverlay);
+      }
     } else {
-      // Exiting fullscreen - move overlay back to body
-      document.body.appendChild(subtitleOverlay);
-      console.log('[Subtitles] Moved overlay back to body');
+      // Exiting fullscreen - move overlays back to body
+      if (subtitleOverlay) {
+        document.body.appendChild(subtitleOverlay);
+        console.log('[Subtitles] Moved overlay back to body');
+      }
+      if (popTagOverlay) {
+        document.body.appendChild(popTagOverlay);
+      }
     }
   }
 
@@ -434,6 +524,132 @@
   }
 
   // ============================================================================
+  // Pop Tag Overlay
+  // ============================================================================
+
+  function createPopTagOverlay() {
+    if (popTagOverlay) return;
+
+    popTagOverlay = document.createElement('div');
+    popTagOverlay.id = 'custom-cuts-pop-tag';
+    popTagOverlay.className = 'custom-cuts-pop-tag';
+    document.body.appendChild(popTagOverlay);
+  }
+
+  function handlePopTagFullscreen() {
+    if (!popTagOverlay) return;
+
+    const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+
+    if (fullscreenElement) {
+      fullscreenElement.appendChild(popTagOverlay);
+    } else {
+      document.body.appendChild(popTagOverlay);
+    }
+  }
+
+  async function loadPopTags() {
+    const videoId = getVideoId();
+    if (!videoId) return;
+
+    try {
+      const data = await chrome.storage.local.get(videoId);
+      const videoData = data[videoId] || {};
+      const tags = videoData.tags || [];
+      popTags = tags.filter(tag => tag.popText && tag.startTime !== undefined);
+    } catch (error) {
+      console.error('Failed to load pop tags:', error);
+      popTags = [];
+    }
+  }
+
+  function updatePopTagDisplay() {
+    if (!videoElement || !popTagOverlay) return;
+
+    const currentTime = videoElement.currentTime;
+    const activePopTag = popTags.find(tag =>
+      currentTime >= tag.startTime && currentTime <= tag.endTime
+    );
+
+    if (activePopTag && activePopTag.popText !== currentPopTagText) {
+      popTagOverlay.textContent = activePopTag.popText;
+      popTagOverlay.classList.add('visible');
+      currentPopTagText = activePopTag.popText;
+
+      // Play sound if enabled
+      if (popTagStyle && popTagStyle.soundEnabled && soundPlayer) {
+        soundPlayer.play(popTagStyle.soundType || 'chime');
+      }
+    } else if (!activePopTag && currentPopTagText !== null) {
+      popTagOverlay.classList.remove('visible');
+      currentPopTagText = null;
+    }
+  }
+
+  async function loadDisplaySettings() {
+    try {
+      const response = await chrome.runtime.sendMessage({ action: 'getSettings' });
+      subtitleStyle = response.subtitleStyle || {};
+      popTagStyle = response.popTagStyle || {};
+
+      // Initialize sound player
+      if (!soundPlayer) {
+        soundPlayer = new SoundPlayer();
+      }
+
+      applySubtitleStyles();
+      applyPopTagStyles();
+    } catch (error) {
+      console.error('Failed to load display settings:', error);
+    }
+  }
+
+  function getFontFamily(value) {
+    switch(value) {
+      case 'system': return "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+      case 'sans-serif': return 'Arial, Helvetica, sans-serif';
+      case 'serif': return 'Georgia, Times, serif';
+      case 'monospace': return 'Consolas, Monaco, monospace';
+      default: return "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+    }
+  }
+
+  function hexToRgba(hex, opacity) {
+    if (!hex) return 'rgba(0, 0, 0, 0.8)';
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${opacity / 100})`;
+  }
+
+  function applySubtitleStyles() {
+    if (!subtitleOverlay || !subtitleStyle) return;
+
+    subtitleOverlay.style.fontSize = (subtitleStyle.fontSize || 18) + 'px';
+    subtitleOverlay.style.fontFamily = getFontFamily(subtitleStyle.fontFamily);
+    subtitleOverlay.style.color = subtitleStyle.textColor || '#ffffff';
+    subtitleOverlay.style.backgroundColor = hexToRgba(
+      subtitleStyle.backgroundColor || '#000000',
+      subtitleStyle.backgroundOpacity || 80
+    );
+  }
+
+  function applyPopTagStyles() {
+    if (!popTagOverlay || !popTagStyle) return;
+
+    popTagOverlay.style.fontSize = (popTagStyle.fontSize || 28) + 'px';
+    popTagOverlay.style.color = popTagStyle.textColor || '#ffffff';
+    popTagOverlay.style.backgroundColor = hexToRgba(
+      popTagStyle.backgroundColor || '#000000',
+      90
+    );
+  }
+
+  function getVideoId() {
+    return 'video_' + window.location.href;
+  }
+
+  // ============================================================================
   // Playback Modes
   // ============================================================================
 
@@ -478,6 +694,9 @@
     if (subtitlesEnabled && subtitleManager) {
       subtitleManager.update(currentTime);
     }
+
+    // Update pop tags
+    updatePopTagDisplay();
 
     // Periodically update video time for transcription sync (every 5 seconds)
     if (transcriptionActive && currentTime - lastVideoTimeUpdate > 5) {
@@ -688,6 +907,19 @@
         }
         sendResponse({ success: true });
         break;
+
+      case 'reloadPopTags':
+        loadPopTags().then(() => {
+          updatePopTagDisplay();
+          sendResponse({ success: true });
+        });
+        return true;
+
+      case 'reloadDisplaySettings':
+        loadDisplaySettings().then(() => {
+          sendResponse({ success: true });
+        });
+        return true;
 
       // Transcription messages from background
       case 'transcriptionStatus':

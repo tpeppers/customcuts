@@ -58,6 +58,105 @@
     </section>
 
     <section class="settings-section">
+      <h2>Display Settings</h2>
+      <p class="section-desc">Customize the appearance of subtitles and pop-up tags.</p>
+
+      <div class="display-subsection">
+        <h3>Subtitle Appearance</h3>
+        <div class="setting-row">
+          <label for="subtitle-font-size">Font Size</label>
+          <input type="range" id="subtitle-font-size" min="12" max="32" value="18">
+          <span id="subtitle-font-size-value" class="range-value">18px</span>
+        </div>
+        <div class="setting-row">
+          <label for="subtitle-font-family">Font</label>
+          <select id="subtitle-font-family">
+            <option value="system">System Default</option>
+            <option value="sans-serif">Sans-serif</option>
+            <option value="serif">Serif</option>
+            <option value="monospace">Monospace</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>Text Color</label>
+          <input type="color" id="subtitle-text-color" value="#ffffff">
+        </div>
+        <div class="setting-row">
+          <label>Background</label>
+          <input type="color" id="subtitle-bg-color" value="#000000">
+          <input type="range" id="subtitle-bg-opacity" min="0" max="100" value="80">
+          <span id="subtitle-bg-opacity-value" class="range-value">80%</span>
+        </div>
+        <div class="preview-box">
+          <label>Preview:</label>
+          <div id="subtitle-preview" class="subtitle-preview">Sample subtitle text</div>
+        </div>
+      </div>
+
+      <div class="display-subsection">
+        <h3>Pop Tag Appearance</h3>
+        <div class="setting-row">
+          <label>Theme</label>
+          <div class="theme-options">
+            <label class="theme-option">
+              <input type="radio" name="pop-tag-preset" value="default" checked>
+              <span class="theme-label">Default</span>
+            </label>
+            <label class="theme-option">
+              <input type="radio" name="pop-tag-preset" value="ios">
+              <span class="theme-label theme-ios">iOS</span>
+            </label>
+            <label class="theme-option">
+              <input type="radio" name="pop-tag-preset" value="android">
+              <span class="theme-label theme-android">Android</span>
+            </label>
+            <label class="theme-option">
+              <input type="radio" name="pop-tag-preset" value="custom">
+              <span class="theme-label">Custom</span>
+            </label>
+          </div>
+        </div>
+        <div id="pop-tag-custom-options" class="custom-options hidden">
+          <div class="setting-row">
+            <label for="pop-tag-font-size">Font Size</label>
+            <input type="range" id="pop-tag-font-size" min="16" max="48" value="28">
+            <span id="pop-tag-font-size-value" class="range-value">28px</span>
+          </div>
+          <div class="setting-row">
+            <label>Text Color</label>
+            <input type="color" id="pop-tag-text-color" value="#ffffff">
+          </div>
+          <div class="setting-row">
+            <label>Background</label>
+            <input type="color" id="pop-tag-bg-color" value="#000000">
+          </div>
+        </div>
+        <div class="preview-box">
+          <label>Preview:</label>
+          <div id="pop-tag-preview" class="pop-tag-preview">Sample pop tag</div>
+        </div>
+        <div class="setting-row sound-settings">
+          <label class="checkbox-label">
+            <input type="checkbox" id="pop-tag-sound-enabled">
+            <span>Play sound when pop tag appears</span>
+          </label>
+        </div>
+        <div id="sound-options" class="sound-options hidden">
+          <div class="setting-row">
+            <label for="pop-tag-sound-type">Sound</label>
+            <select id="pop-tag-sound-type">
+              <option value="chime">Chime (iMessage style)</option>
+              <option value="ding">Ding (Bell)</option>
+              <option value="pop">Pop</option>
+              <option value="bubble">Bubble</option>
+            </select>
+            <button id="test-sound-btn" class="btn btn-secondary btn-small">Test</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="settings-section">
       <h2>Keyboard Shortcuts</h2>
       <p class="section-desc">Customize shortcuts in <a href="#" id="shortcuts-link">Chrome's extension shortcuts</a>.</p>
 

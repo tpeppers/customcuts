@@ -356,6 +356,12 @@ h3 {
   margin-left: 2px;
 }
 
+.tag-chip .pop-preview {
+  font-style: italic;
+  color: #666;
+  margin-left: 4px;
+}
+
 .video-actions {
   display: flex;
   flex-direction: column;
@@ -659,6 +665,18 @@ h3 {
   padding: 2px 8px;
   border-radius: 10px;
   font-size: 11px;
+}
+
+.modal-tag-pop-text {
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+  display: block;
+  margin-top: 4px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .remove-tag-btn {

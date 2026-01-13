@@ -6,7 +6,23 @@ const DEFAULT_SETTINGS = {
   speechEngine: 'faster-whisper',  // 'whisper', 'faster-whisper', or 'parakeet'
   whisperModel: 'large-v3',
   parakeetModel: 'nvidia/parakeet-tdt-0.6b-v3',
-  whisperLanguage: 'en'
+  whisperLanguage: 'en',
+  // Display settings for subtitles and pop tags
+  subtitleStyle: {
+    fontSize: 18,
+    textColor: '#ffffff',
+    backgroundColor: '#000000',
+    backgroundOpacity: 80,
+    fontFamily: 'system'
+  },
+  popTagStyle: {
+    preset: 'default',  // 'default', 'ios', 'android', 'custom'
+    fontSize: 28,
+    textColor: '#ffffff',
+    backgroundColor: '#000000',
+    soundEnabled: false,
+    soundType: 'chime'  // 'chime', 'ding', 'pop', 'bubble'
+  }
 };
 
 // Native messaging host name

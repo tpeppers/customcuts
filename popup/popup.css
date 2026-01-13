@@ -207,6 +207,49 @@ h3 {
   display: none;
 }
 
+.pop-tag-dialog {
+  background: #f8f9fa;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.pop-tag-dialog.hidden {
+  display: none;
+}
+
+.pop-tag-dialog label {
+  display: block;
+  font-size: 12px;
+  color: #555;
+  margin-bottom: 6px;
+}
+
+.pop-tag-dialog textarea {
+  width: 100%;
+  min-height: 60px;
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+  box-sizing: border-box;
+  margin-bottom: 8px;
+}
+
+.pop-tag-dialog textarea:focus {
+  outline: none;
+  border-color: #3498db;
+}
+
+.pop-tag-dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .btn-small {
   padding: 4px 8px;
   font-size: 11px;
@@ -314,6 +357,16 @@ h3 {
   padding: 2px 6px;
   border-radius: 10px;
   font-size: 10px;
+}
+
+.tag-item .tag-pop-text {
+  font-size: 11px;
+  color: #666;
+  font-style: italic;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tag-item .remove-tag {
@@ -509,6 +562,18 @@ h3 {
 .feedback-container textarea:focus {
   outline: none;
   border-color: #3498db;
+}
+
+.feedback-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.feedback-status {
+  font-size: 11px;
+  color: #27ae60;
 }
 
 /* Queue Section */

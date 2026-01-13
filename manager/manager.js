@@ -297,7 +297,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         const urlMatch = video.url.toLowerCase().includes(searchTerm);
         const titleMatch = video.title.toLowerCase().includes(searchTerm);
         const tagMatch = video.tags.some(t => t.name.toLowerCase().includes(searchTerm));
-        return urlMatch || titleMatch || tagMatch;
+        const feedbackMatch = video.feedback && video.feedback.toLowerCase().includes(searchTerm);
+        const popTextMatch = video.tags.some(t => t.popText && t.popText.toLowerCase().includes(searchTerm));
+        return urlMatch || titleMatch || tagMatch || feedbackMatch || popTextMatch;
       });
     }
 
@@ -424,15 +426,16 @@ document.addEventListener('DOMContentLoaded', async () => {
           </div>
           <div class="video-tags">
             ${video.tags.slice(0, 8).map(tag => `
-              <span class="tag-chip ${tag.startTime !== undefined ? 'has-time' : ''}">
-                ${tag.name}
+              <span class="tag-chip ${tag.startTime !== undefined ? 'has-time' : ''}" ${tag.popText ? `title="${escapeHtml(tag.popText)}"` : ''}>
+                ${escapeHtml(tag.name)}
                 ${tag.startTime !== undefined ? `<small>(${formatTime(tag.startTime)})</small>` : ''}
                 ${tag.intensity ? `<span class="intensity">${tag.intensity}</span>` : ''}
+                ${tag.popText ? `<small class="pop-preview">"${escapeHtml(tag.popText.substring(0, 15))}${tag.popText.length > 15 ? '...' : ''}"</small>` : ''}
               </span>
             `).join('')}
             ${video.tags.length > 8 ? `<span class="tag-chip">+${video.tags.length - 8} more</span>` : ''}
           </div>
-          ${video.feedback ? `<div class="video-feedback">${video.feedback}</div>` : ''}
+          ${video.feedback ? `<div class="video-feedback">${escapeHtml(video.feedback)}</div>` : ''}
         </div>
         <div class="video-actions">
           <button class="btn btn-primary edit-btn" data-id="${video.id}">Edit Tags</button>
@@ -531,9 +534,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     modalTagsList.innerHTML = tags.map((tag, index) => `
       <div class="modal-tag-item">
         <div class="modal-tag-info">
-          <span class="modal-tag-name">${tag.name}</span>
+          <span class="modal-tag-name">${escapeHtml(tag.name)}</span>
           ${tag.startTime !== undefined ? `<span class="modal-tag-time">${formatTime(tag.startTime)} - ${formatTime(tag.endTime)}</span>` : ''}
           ${tag.intensity ? `<span class="modal-tag-intensity">${tag.intensity}/10</span>` : ''}
+          ${tag.popText ? `<span class="modal-tag-pop-text" title="${escapeHtml(tag.popText)}">"${escapeHtml(tag.popText.substring(0, 30))}${tag.popText.length > 30 ? '...' : ''}"</span>` : ''}
         </div>
         <button class="remove-tag-btn" data-index="${index}">&times;</button>
       </div>
