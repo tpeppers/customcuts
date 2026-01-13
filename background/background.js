@@ -13,7 +13,8 @@ const DEFAULT_SETTINGS = {
     textColor: '#ffffff',
     backgroundColor: '#000000',
     backgroundOpacity: 80,
-    fontFamily: 'system'
+    fontFamily: 'system',
+    position: 'bottom-center'  // 'bottom-center', 'bottom-left', 'bottom-right'
   },
   popTagStyle: {
     preset: 'default',  // 'default', 'ios', 'android', 'custom'
@@ -21,8 +22,10 @@ const DEFAULT_SETTINGS = {
     textColor: '#ffffff',
     backgroundColor: '#000000',
     soundEnabled: false,
-    soundType: 'chime'  // 'chime', 'ding', 'pop', 'bubble'
-  }
+    soundType: 'chime',  // 'chime', 'ding', 'pop', 'bubble'
+    position: 'bottom-center'  // 'bottom-center', 'bottom-left', 'bottom-right'
+  },
+  obeyVolumeTags: true
 };
 
 // Native messaging host name

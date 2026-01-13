@@ -35,6 +35,13 @@
   let popTagStyle = null;
   let soundPlayer = null;
 
+  // Volume tag state
+  let obeyVolumeTags = true;
+  let volumeTags = [];
+  let activeVolumeTag = null;
+  let originalVolume = null;  // Volume before tag was applied
+  let startingVolume = null;  // Default starting volume from VOLUME tag without time range
+
   // Sound Player using Web Audio API
   class SoundPlayer {
     constructor() {
@@ -270,6 +277,9 @@
     playbackMode = videoData.playbackMode || 'normal';
     playbackTagFilters = videoData.selectedTagFilters || [];
     videoTags = videoData.tags || [];
+
+    // Load volume tags
+    loadVolumeTags();
 
     updatePlaybackRanges();
     updateSubtitleVisibility();
@@ -630,11 +640,74 @@
     }
   }
 
+  // ============================================================================
+  // Volume Tag Functions
+  // ============================================================================
+
+  function loadVolumeTags() {
+    // Filter tags to find VOLUME tags
+    volumeTags = videoTags.filter(tag =>
+      tag.name.toLowerCase() === 'volume' && tag.intensity
+    );
+
+    // Find starting volume tag (no time range set, or startTime === endTime)
+    const startingVolumeTag = volumeTags.find(tag =>
+      tag.startTime === undefined || tag.startTime === tag.endTime
+    );
+
+    if (startingVolumeTag && startingVolumeTag.intensity) {
+      startingVolume = startingVolumeTag.intensity / 10;
+    } else {
+      startingVolume = null;
+    }
+
+    // Apply starting volume if set and obeyVolumeTags is enabled
+    if (obeyVolumeTags && startingVolume !== null && videoElement) {
+      videoElement.volume = startingVolume;
+    }
+  }
+
+  function updateVolumeFromTags(currentTime) {
+    if (!obeyVolumeTags || !videoElement) return;
+
+    // Find active volume tag (with time range)
+    const activeTag = volumeTags.find(tag =>
+      tag.startTime !== undefined &&
+      tag.startTime !== tag.endTime &&
+      currentTime >= tag.startTime &&
+      currentTime <= tag.endTime
+    );
+
+    if (activeTag) {
+      // Entering or continuing in a volume tag range
+      if (activeVolumeTag !== activeTag) {
+        // New tag - save original volume and apply tag volume
+        if (originalVolume === null) {
+          originalVolume = videoElement.volume;
+        }
+        activeVolumeTag = activeTag;
+        const tagVolume = activeTag.intensity / 10;
+        videoElement.volume = tagVolume;
+      }
+    } else {
+      // Outside any volume tag range
+      if (activeVolumeTag !== null) {
+        // Restore original volume
+        if (originalVolume !== null) {
+          videoElement.volume = originalVolume;
+          originalVolume = null;
+        }
+        activeVolumeTag = null;
+      }
+    }
+  }
+
   async function loadDisplaySettings() {
     try {
       const response = await chrome.runtime.sendMessage({ action: 'getSettings' });
       subtitleStyle = response.subtitleStyle || {};
       popTagStyle = response.popTagStyle || {};
+      obeyVolumeTags = response.obeyVolumeTags !== false;
 
       // Initialize sound player
       if (!soundPlayer) {
@@ -676,6 +749,13 @@
       subtitleStyle.backgroundColor || '#000000',
       subtitleStyle.backgroundOpacity || 80
     );
+
+    // Apply position
+    subtitleOverlay.classList.remove('position-bottom-center', 'position-bottom-left', 'position-bottom-right');
+    const position = subtitleStyle.position || 'bottom-center';
+    if (position !== 'bottom-center') {
+      subtitleOverlay.classList.add(`position-${position}`);
+    }
   }
 
   function applyPopTagStyles() {
@@ -689,6 +769,15 @@
         popTagStyle.backgroundColor || '#000000',
         90
       );
+    }
+
+    // Apply position to container
+    if (popTagContainer) {
+      popTagContainer.classList.remove('position-bottom-center', 'position-bottom-left', 'position-bottom-right');
+      const position = popTagStyle.position || 'bottom-center';
+      if (position !== 'bottom-center') {
+        popTagContainer.classList.add(`position-${position}`);
+      }
     }
   }
 
@@ -744,6 +833,9 @@
 
     // Update pop tags
     updatePopTagDisplay();
+
+    // Update volume from tags
+    updateVolumeFromTags(currentTime);
 
     // Periodically update video time for transcription sync (every 5 seconds)
     if (transcriptionActive && currentTime - lastVideoTimeUpdate > 5) {
@@ -932,6 +1024,17 @@
         sendResponse({ success: true });
         break;
 
+      case 'setObeyVolumeTags':
+        obeyVolumeTags = message.enabled;
+        if (!obeyVolumeTags && originalVolume !== null && videoElement) {
+          // Restore volume when disabled
+          videoElement.volume = originalVolume;
+          originalVolume = null;
+          activeVolumeTag = null;
+        }
+        sendResponse({ success: true });
+        break;
+
       case 'fastForward':
         if (videoElement) {
           videoElement.currentTime += message.seconds || 10;
@@ -958,6 +1061,8 @@
       case 'reloadPopTags':
         loadPopTags().then(() => {
           updatePopTagDisplay();
+          // Also reload video settings to get updated volume tags
+          loadVideoSettings();
           sendResponse({ success: true });
         });
         return true;

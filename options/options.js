@@ -23,6 +23,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const subtitleBgColor = document.getElementById('subtitle-bg-color');
   const subtitleBgOpacity = document.getElementById('subtitle-bg-opacity');
   const subtitleBgOpacityValue = document.getElementById('subtitle-bg-opacity-value');
+  const subtitlePosition = document.getElementById('subtitle-position');
   const subtitlePreview = document.getElementById('subtitle-preview');
 
   const popTagPresetRadios = document.querySelectorAll('input[name="pop-tag-preset"]');
@@ -31,6 +32,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const popTagFontSizeValue = document.getElementById('pop-tag-font-size-value');
   const popTagTextColor = document.getElementById('pop-tag-text-color');
   const popTagBgColor = document.getElementById('pop-tag-bg-color');
+  const popTagPosition = document.getElementById('pop-tag-position');
   const popTagPreview = document.getElementById('pop-tag-preview');
   const popTagSoundEnabled = document.getElementById('pop-tag-sound-enabled');
   const soundOptions = document.getElementById('sound-options');
@@ -139,6 +141,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     subtitleBgColor.value = subStyle.backgroundColor || '#000000';
     subtitleBgOpacity.value = subStyle.backgroundOpacity || 80;
     subtitleBgOpacityValue.textContent = (subStyle.backgroundOpacity || 80) + '%';
+    subtitlePosition.value = subStyle.position || 'bottom-center';
     updateSubtitlePreview();
 
     // Load pop tag settings
@@ -151,6 +154,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     popTagBgColor.value = popStyle.backgroundColor || '#000000';
     popTagSoundEnabled.checked = popStyle.soundEnabled || false;
     popTagSoundType.value = popStyle.soundType || 'chime';
+    popTagPosition.value = popStyle.position || 'bottom-center';
 
     updatePopTagCustomVisibility();
     updatePopTagPreview();
@@ -380,7 +384,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       textColor: subtitleTextColor.value,
       backgroundColor: subtitleBgColor.value,
       backgroundOpacity: parseInt(subtitleBgOpacity.value) || 80,
-      fontFamily: subtitleFontFamily.value
+      fontFamily: subtitleFontFamily.value,
+      position: subtitlePosition.value
     };
 
     // Save pop tag settings
@@ -391,7 +396,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       textColor: preset === 'custom' ? popTagTextColor.value : POP_TAG_PRESETS[preset].textColor,
       backgroundColor: preset === 'custom' ? popTagBgColor.value : POP_TAG_PRESETS[preset].backgroundColor,
       soundEnabled: popTagSoundEnabled.checked,
-      soundType: popTagSoundType.value
+      soundType: popTagSoundType.value,
+      position: popTagPosition.value
     };
 
     await chrome.runtime.sendMessage({

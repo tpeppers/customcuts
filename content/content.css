@@ -21,6 +21,20 @@
   opacity: 1;
 }
 
+/* Subtitle position variants */
+.custom-cuts-subtitle-overlay.position-bottom-left {
+  left: 20px;
+  transform: none;
+  text-align: left;
+}
+
+.custom-cuts-subtitle-overlay.position-bottom-right {
+  left: auto;
+  right: 20px;
+  transform: none;
+  text-align: right;
+}
+
 .custom-cuts-pop-tag-container {
   position: fixed;
   bottom: 140px;
@@ -32,6 +46,20 @@
   gap: 10px;
   z-index: 999998;
   pointer-events: none;
+}
+
+/* Pop tag position variants */
+.custom-cuts-pop-tag-container.position-bottom-left {
+  left: 20px;
+  transform: none;
+  align-items: flex-start;
+}
+
+.custom-cuts-pop-tag-container.position-bottom-right {
+  left: auto;
+  right: 20px;
+  transform: none;
+  align-items: flex-end;
 }
 
 .custom-cuts-pop-tag {

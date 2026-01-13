@@ -26,6 +26,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const playbackMode = document.getElementById('playback-mode');
   const tagFilterSection = document.getElementById('tag-filter-section');
   const tagCheckboxes = document.getElementById('tag-checkboxes');
+  const obeyVolumeTagsToggle = document.getElementById('obey-volume-tags');
   const autoCloseToggle = document.getElementById('auto-close-toggle');
   const timedCloseToggle = document.getElementById('timed-close-toggle');
   const closeTimeInput = document.getElementById('close-time-input');
@@ -206,6 +207,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (videoData.playbackMode !== 'normal') {
         tagFilterSection.classList.remove('hidden');
       }
+    }
+
+    // Load obeyVolumeTags from global settings
+    try {
+      const settings = await chrome.runtime.sendMessage({ action: 'getSettings' });
+      obeyVolumeTagsToggle.checked = settings.obeyVolumeTags !== false;
+    } catch (e) {
+      obeyVolumeTagsToggle.checked = true; // Default to on
     }
   }
 
@@ -698,12 +707,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     const videoData = data[videoId] || {};
     const tags = videoData.tags || [];
 
-    // Pop tags display for a default duration of 3 seconds
-    const popTagDuration = 3;
+    // Use Tag Time Range if filled in, otherwise default to 3 seconds from current time
+    const rangeStart = parseTime(startTimeInput.value);
+    const rangeEnd = parseTime(endTimeInput.value);
+
+    let tagStartTime, tagEndTime;
+    if (rangeStart !== null && rangeEnd !== null) {
+      // Use the time range values
+      tagStartTime = Math.min(rangeStart, rangeEnd);
+      tagEndTime = Math.max(rangeStart, rangeEnd);
+    } else {
+      // Default: 3 seconds from captured time
+      tagStartTime = popTagStartTime;
+      tagEndTime = popTagStartTime + 3;
+    }
+
     tags.push({
       name: 'Pop',
-      startTime: popTagStartTime,
-      endTime: popTagStartTime + popTagDuration,
+      startTime: tagStartTime,
+      endTime: tagEndTime,
       popText: text,
       createdAt: Date.now()
     });
@@ -797,6 +819,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       action: 'setPlaybackMode',
       mode,
       tagFilters: getSelectedTagFilters()
+    });
+  });
+
+  obeyVolumeTagsToggle.addEventListener('change', async () => {
+    // Save to global settings
+    const settings = await chrome.runtime.sendMessage({ action: 'getSettings' });
+    settings.obeyVolumeTags = obeyVolumeTagsToggle.checked;
+    await chrome.runtime.sendMessage({ action: 'saveSettings', settings });
+    // Notify content script
+    chrome.tabs.sendMessage(currentTab.id, {
+      action: 'setObeyVolumeTags',
+      enabled: obeyVolumeTagsToggle.checked
     });
   });
 
