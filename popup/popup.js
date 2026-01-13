@@ -3,6 +3,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   const noVideoSection = document.getElementById('no-video-section');
   const videoControls = document.getElementById('video-controls');
   const subtitlesToggle = document.getElementById('subtitles-toggle');
+  const generateSubtitlesBtn = document.getElementById('generate-subtitles-btn');
+  const generateSubtitlesStatus = document.getElementById('generate-subtitles-status');
+  const displayGeneratedToggle = document.getElementById('display-generated-toggle');
+  const generatedIndicator = document.getElementById('generated-indicator');
+
+  // Pattern matching elements
+  const patternList = document.getElementById('pattern-list');
+  const noPatternsText = document.getElementById('no-patterns-text');
+  const patternActionSelect = document.getElementById('pattern-action-select');
+  const patternNameInput = document.getElementById('pattern-name-input');
+  const patternTypeSelect = document.getElementById('pattern-type-select');
+  const learnPatternBtn = document.getElementById('learn-pattern-btn');
+  const learnPatternStatus = document.getElementById('learn-pattern-status');
+
+  // Pattern state (session-level, not persisted per-video)
+  let allPatterns = [];
+  let enabledPatternIds = new Set();
+
   const markStartBtn = document.getElementById('mark-start');
   const markEndBtn = document.getElementById('mark-end');
   const startTimeInput = document.getElementById('start-time-input');
@@ -171,6 +189,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Subtitles always start off - user must explicitly enable each session
     subtitlesToggle.checked = false;
+
+    // Check for generated subtitles
+    const hasGeneratedSubtitles = videoData.generatedSubtitles && videoData.generatedSubtitles.length > 0;
+    updateGeneratedSubtitlesUI(hasGeneratedSubtitles, videoData.displayGeneratedSubtitles || false);
+
     autoCloseToggle.checked = videoData.autoClose || false;
     timedCloseToggle.checked = videoData.timedClose || false;
     closeTimeInput.value = videoData.closeTime || '';
@@ -806,6 +829,256 @@ document.addEventListener('DOMContentLoaded', async () => {
     await saveVideoData({ subtitlesEnabled: enabled });
     chrome.tabs.sendMessage(currentTab.id, { action: 'toggleSubtitles', enabled });
   });
+
+  // Helper function to update generated subtitles UI
+  function updateGeneratedSubtitlesUI(hasSubtitles, displayEnabled) {
+    if (hasSubtitles) {
+      displayGeneratedToggle.disabled = false;
+      displayGeneratedToggle.checked = displayEnabled;
+      generatedIndicator.textContent = '[yes]';
+      generatedIndicator.classList.remove('no-subtitles');
+      generatedIndicator.classList.add('has-subtitles');
+    } else {
+      displayGeneratedToggle.disabled = true;
+      displayGeneratedToggle.checked = false;
+      generatedIndicator.textContent = '[none]';
+      generatedIndicator.classList.remove('has-subtitles');
+      generatedIndicator.classList.add('no-subtitles');
+    }
+  }
+
+  // Generate Subtitles button
+  generateSubtitlesBtn.addEventListener('click', async () => {
+    // Clear any existing status
+    generateSubtitlesStatus.textContent = 'Generating...';
+    generateSubtitlesStatus.className = 'generate-status generating';
+    generateSubtitlesBtn.disabled = true;
+
+    try {
+      // Send message to content script to start generating subtitles
+      const response = await chrome.tabs.sendMessage(currentTab.id, { action: 'generateSubtitles' });
+
+      if (response && response.success) {
+        generateSubtitlesStatus.textContent = 'Generation started';
+        generateSubtitlesStatus.className = 'generate-status success';
+      } else {
+        generateSubtitlesStatus.textContent = response?.error || 'Failed to start';
+        generateSubtitlesStatus.className = 'generate-status error';
+        generateSubtitlesBtn.disabled = false;
+      }
+    } catch (error) {
+      generateSubtitlesStatus.textContent = 'Error: ' + error.message;
+      generateSubtitlesStatus.className = 'generate-status error';
+      generateSubtitlesBtn.disabled = false;
+    }
+  });
+
+  // Display Generated Subtitles toggle
+  displayGeneratedToggle.addEventListener('change', async () => {
+    const enabled = displayGeneratedToggle.checked;
+    await saveVideoData({ displayGeneratedSubtitles: enabled });
+    chrome.tabs.sendMessage(currentTab.id, { action: 'toggleGeneratedSubtitles', enabled });
+  });
+
+  // Listen for subtitle generation completion messages
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === 'subtitleGenerationComplete') {
+      generateSubtitlesBtn.disabled = false;
+      if (message.success) {
+        generateSubtitlesStatus.textContent = `Generated ${message.count} segments`;
+        generateSubtitlesStatus.className = 'generate-status success';
+        updateGeneratedSubtitlesUI(true, false);
+      } else {
+        generateSubtitlesStatus.textContent = message.error || 'Generation failed';
+        generateSubtitlesStatus.className = 'generate-status error';
+      }
+    } else if (message.action === 'subtitleGenerationProgress') {
+      generateSubtitlesStatus.textContent = `Generating... ${message.count} segments`;
+    }
+  });
+
+  // ============================================================================
+  // Pattern Matching Functions
+  // ============================================================================
+
+  async function loadPatterns() {
+    const data = await chrome.storage.local.get('audioPatterns');
+    const patternData = data.audioPatterns || { patterns: [], settings: {} };
+    allPatterns = patternData.patterns || [];
+    renderPatternList();
+  }
+
+  async function savePatterns() {
+    const data = await chrome.storage.local.get('audioPatterns');
+    const patternData = data.audioPatterns || { patterns: [], settings: {} };
+    patternData.patterns = allPatterns;
+    await chrome.storage.local.set({ audioPatterns: patternData });
+  }
+
+  function renderPatternList() {
+    if (allPatterns.length === 0) {
+      patternList.innerHTML = '<p class="empty-text" id="no-patterns-text">No patterns learned</p>';
+      return;
+    }
+
+    patternList.innerHTML = allPatterns.map(pattern => `
+      <div class="pattern-item" data-pattern-id="${pattern.id}">
+        <div class="pattern-item-left">
+          <input type="checkbox" class="pattern-checkbox"
+            ${enabledPatternIds.has(pattern.id) ? 'checked' : ''}
+            data-pattern-id="${pattern.id}">
+          <span class="pattern-item-name">${escapeHtml(pattern.name)}</span>
+          <span class="pattern-item-type">${pattern.type === 'exact' ? 'Exact' : 'Similar'}</span>
+          <span class="pattern-item-duration">${pattern.duration?.toFixed(1) || '?'}s</span>
+        </div>
+        <div class="pattern-item-right">
+          <button class="pattern-remove" data-pattern-id="${pattern.id}" title="Delete pattern">×</button>
+        </div>
+      </div>
+    `).join('');
+
+    // Add event listeners
+    patternList.querySelectorAll('.pattern-checkbox').forEach(checkbox => {
+      checkbox.addEventListener('change', (e) => {
+        const patternId = e.target.dataset.patternId;
+        if (e.target.checked) {
+          enabledPatternIds.add(patternId);
+        } else {
+          enabledPatternIds.delete(patternId);
+        }
+        updatePatternDetection();
+      });
+    });
+
+    patternList.querySelectorAll('.pattern-remove').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        const patternId = e.target.dataset.patternId;
+        allPatterns = allPatterns.filter(p => p.id !== patternId);
+        enabledPatternIds.delete(patternId);
+        await savePatterns();
+        renderPatternList();
+        updatePatternDetection();
+      });
+    });
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  async function updatePatternDetection() {
+    // Send enabled patterns to content script for detection
+    const enabledPatterns = allPatterns.filter(p => enabledPatternIds.has(p.id));
+    const action = patternActionSelect.value;
+
+    if (currentTab) {
+      chrome.tabs.sendMessage(currentTab.id, {
+        action: 'updatePatternDetection',
+        patterns: enabledPatterns,
+        detectionAction: action
+      });
+    }
+  }
+
+  // Learn Pattern button
+  learnPatternBtn.addEventListener('click', async () => {
+    const patternName = patternNameInput.value.trim();
+    const patternType = patternTypeSelect.value;
+
+    if (!patternName) {
+      learnPatternStatus.textContent = 'Enter a pattern name';
+      learnPatternStatus.className = 'learn-status error';
+      return;
+    }
+
+    const startTime = parseTime(startTimeInput.value);
+    const endTime = parseTime(endTimeInput.value);
+
+    if (startTime === null || endTime === null || startTime >= endTime) {
+      learnPatternStatus.textContent = 'Set valid time range first';
+      learnPatternStatus.className = 'learn-status error';
+      return;
+    }
+
+    learnPatternStatus.textContent = 'Learning...';
+    learnPatternStatus.className = 'learn-status learning';
+    learnPatternBtn.disabled = true;
+
+    try {
+      // Get current video time
+      const videoResponse = await chrome.tabs.sendMessage(currentTab.id, { action: 'getVideoInfo' });
+      const currentVideoTime = videoResponse?.currentTime || 0;
+
+      // Extract audio from offscreen buffer
+      const extractResponse = await chrome.runtime.sendMessage({
+        action: 'extractAudioForPattern',
+        startTime: startTime,
+        endTime: endTime,
+        currentVideoTime: currentVideoTime
+      });
+
+      if (!extractResponse.success) {
+        learnPatternStatus.textContent = extractResponse.error || 'Audio extraction failed';
+        learnPatternStatus.className = 'learn-status error';
+        learnPatternBtn.disabled = false;
+        return;
+      }
+
+      // Send to native host for pattern learning
+      const learnResponse = await chrome.runtime.sendMessage({
+        action: 'learnPattern',
+        audio: extractResponse.audio,
+        patternType: patternType,
+        name: patternName
+      });
+
+      if (learnResponse.type === 'pattern_learned') {
+        // Add to local patterns
+        const newPattern = {
+          id: learnResponse.pattern_id,
+          name: patternName,
+          type: learnResponse.patternType,
+          duration: learnResponse.duration,
+          fingerprint: learnResponse.fingerprint,
+          embedding: learnResponse.embedding,
+          threshold: 0.85,
+          createdAt: Date.now()
+        };
+
+        allPatterns.push(newPattern);
+        await savePatterns();
+
+        // Enable the new pattern by default
+        enabledPatternIds.add(newPattern.id);
+
+        renderPatternList();
+        updatePatternDetection();
+
+        learnPatternStatus.textContent = `Learned: ${patternName}`;
+        learnPatternStatus.className = 'learn-status success';
+        patternNameInput.value = '';
+      } else {
+        learnPatternStatus.textContent = learnResponse.message || 'Learning failed';
+        learnPatternStatus.className = 'learn-status error';
+      }
+
+    } catch (error) {
+      learnPatternStatus.textContent = 'Error: ' + error.message;
+      learnPatternStatus.className = 'learn-status error';
+    }
+
+    learnPatternBtn.disabled = false;
+  });
+
+  // Pattern action change
+  patternActionSelect.addEventListener('change', () => {
+    updatePatternDetection();
+  });
+
+  // Load patterns on init
+  loadPatterns();
 
   playbackMode.addEventListener('change', async () => {
     const mode = playbackMode.value;

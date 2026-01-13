@@ -34,6 +34,9 @@ const NATIVE_HOST_NAME = 'com.customcuts.whisper_host';
 // Transcription state per tab
 const transcriptionState = new Map();
 
+// Subtitle generation state per tab
+const generationState = new Map();
+
 // Offscreen document state
 let offscreenCreated = false;
 
@@ -371,6 +374,212 @@ class TranscriptionSession {
 }
 
 // ============================================================================
+// Subtitle Generation Session (Full Video)
+// ============================================================================
+
+class SubtitleGenerationSession {
+  constructor(tabId, duration) {
+    this.tabId = tabId;
+    this.duration = duration;
+    this.nativePort = null;
+    this.isInitialized = false;
+    this.collectedSegments = [];
+    this.keepAliveInterval = null;
+  }
+
+  startKeepAlive() {
+    if (this.keepAliveInterval) return;
+
+    const self = this;
+    this.keepAliveInterval = setInterval(() => {
+      chrome.runtime.getPlatformInfo(() => {});
+      if (self.nativePort) {
+        try {
+          self.nativePort.postMessage({ type: 'ping' });
+        } catch (e) {
+          console.log('Keep-alive ping failed:', e);
+        }
+      }
+    }, 500);
+  }
+
+  stopKeepAlive() {
+    if (this.keepAliveInterval) {
+      clearInterval(this.keepAliveInterval);
+      this.keepAliveInterval = null;
+    }
+  }
+
+  async start() {
+    try {
+      this.startKeepAlive();
+
+      // Connect to native host
+      this.nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+
+      this.nativePort.onMessage.addListener((message) => {
+        this.handleNativeMessage(message);
+      });
+
+      this.nativePort.onDisconnect.addListener(() => {
+        const error = chrome.runtime.lastError;
+        console.log('Generation native host disconnected:', error?.message || 'unknown');
+        this.stopKeepAlive();
+        this.handleDisconnect(error?.message);
+      });
+
+      // Initialize speech engine
+      const settings = await getSettings();
+      const engine = settings.speechEngine || 'faster-whisper';
+      const model = engine === 'parakeet' ? settings.parakeetModel : settings.whisperModel;
+
+      this.nativePort.postMessage({
+        type: 'init',
+        engine: engine,
+        model: model,
+        device: 'cuda',
+        language: settings.whisperLanguage
+      });
+      console.log(`[Generation] Initializing ${engine} with model ${model}`);
+
+      // Start audio capture via offscreen document
+      await this.startAudioCapture();
+
+      return { success: true };
+
+    } catch (error) {
+      console.error('Failed to start subtitle generation:', error);
+      this.cleanup();
+      return { success: false, error: error.message };
+    }
+  }
+
+  async startAudioCapture() {
+    try {
+      const streamId = await chrome.tabCapture.getMediaStreamId({
+        targetTabId: this.tabId
+      });
+
+      if (!streamId) {
+        throw new Error('Failed to get media stream ID');
+      }
+
+      await ensureOffscreenDocument();
+
+      const response = await chrome.runtime.sendMessage({
+        action: 'startGenerationCapture',
+        streamId: streamId
+      });
+
+      if (!response.success) {
+        throw new Error(response.error || 'Failed to start capture');
+      }
+
+    } catch (error) {
+      console.error('Generation audio capture error:', error);
+      throw error;
+    }
+  }
+
+  handleAudioChunk(audio, duration, timestamp) {
+    if (!this.nativePort || !this.isInitialized) {
+      return;
+    }
+
+    const chunkId = `gen_${this.tabId}_${Date.now()}`;
+    console.log(`[Generation] Sending chunk at timestamp=${timestamp?.toFixed(1)}`);
+
+    this.nativePort.postMessage({
+      type: 'transcribe',
+      audio: audio,
+      timestamp: timestamp || 0,
+      chunkId: chunkId,
+      language: 'en'
+    });
+  }
+
+  handleNativeMessage(message) {
+    if (message.type !== 'pong' && message.type !== 'heartbeat') {
+      console.log('Generation Native:', message.type);
+    }
+
+    switch (message.type) {
+      case 'ready':
+        console.log('Generation engine initialized:', message.model, message.device);
+        this.isInitialized = true;
+        if (this.nativePort) {
+          this.nativePort.postMessage({ type: 'ping' });
+        }
+        break;
+
+      case 'transcription':
+        if (message.segments && message.segments.length > 0) {
+          console.log(`[Generation] Result: "${message.text?.substring(0, 50)}..." segments:`, message.segments.length);
+          this.collectedSegments.push(...message.segments);
+
+          // Send progress to content script
+          sendToTab(this.tabId, {
+            action: 'generationResult',
+            segments: message.segments,
+            text: message.text,
+            chunkId: message.chunkId
+          });
+        }
+        break;
+
+      case 'error':
+        console.error('Generation error:', message.message);
+        break;
+
+      case 'pong':
+      case 'status':
+      case 'transcribe_ack':
+      case 'heartbeat':
+      case 'reset_complete':
+        break;
+    }
+  }
+
+  handleDisconnect(errorMessage) {
+    // Generation finished (or errored)
+    this.finishGeneration(errorMessage);
+  }
+
+  finishGeneration(error) {
+    this.stopKeepAlive();
+
+    // Notify content script
+    sendToTab(this.tabId, {
+      action: 'generationComplete',
+      success: !error && this.collectedSegments.length > 0,
+      error: error,
+      count: this.collectedSegments.length
+    });
+
+    this.cleanup();
+    generationState.delete(this.tabId);
+  }
+
+  stop() {
+    this.finishGeneration(null);
+  }
+
+  cleanup() {
+    chrome.runtime.sendMessage({ action: 'stopGenerationCapture' }).catch(() => {});
+
+    if (this.nativePort) {
+      try {
+        this.nativePort.postMessage({ type: 'shutdown' });
+      } catch (e) {}
+      this.nativePort.disconnect();
+      this.nativePort = null;
+    }
+
+    this.isInitialized = false;
+  }
+}
+
+// ============================================================================
 // Message Handlers
 // ============================================================================
 
@@ -421,11 +630,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       return true;
 
-    // Audio chunk from offscreen document
+    // Audio chunk from offscreen document (live transcription)
     case 'audioChunk':
       // Find the active transcription session and send the chunk
       for (const [tid, session] of transcriptionState.entries()) {
         session.handleAudioChunk(message.audio, message.duration);
+      }
+      break;
+
+    // Audio chunk from generation capture
+    case 'generationAudioChunk':
+      // Find the active generation session and send the chunk
+      for (const [tid, session] of generationState.entries()) {
+        session.handleAudioChunk(message.audio, message.duration, message.timestamp);
       }
       break;
 
@@ -488,6 +705,116 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       break;
 
+    // Subtitle generation commands
+    case 'startSubtitleGeneration':
+      if (!tabId) {
+        sendResponse({ success: false, error: 'No tab ID' });
+        return true;
+      }
+
+      // Check if already running
+      if (generationState.has(tabId)) {
+        sendResponse({ success: false, error: 'Generation already running' });
+        return true;
+      }
+
+      // Stop any live transcription first
+      if (transcriptionState.has(tabId)) {
+        transcriptionState.get(tabId).stop();
+        transcriptionState.delete(tabId);
+      }
+
+      // Start generation session
+      const genSession = new SubtitleGenerationSession(tabId, message.duration);
+      generationState.set(tabId, genSession);
+
+      genSession.start().then(result => {
+        if (!result.success) {
+          generationState.delete(tabId);
+        }
+        sendResponse(result);
+      });
+      return true;
+
+    case 'stopSubtitleGeneration':
+      if (tabId && generationState.has(tabId)) {
+        generationState.get(tabId).stop();
+        generationState.delete(tabId);
+      }
+      sendResponse({ success: true });
+      return true;
+
+    // Pattern learning commands
+    case 'extractAudioForPattern':
+      // Forward to offscreen document
+      chrome.runtime.sendMessage({
+        action: 'extractAudioForPattern',
+        startTime: message.startTime,
+        endTime: message.endTime,
+        currentVideoTime: message.currentVideoTime
+      }).then(response => {
+        sendResponse(response);
+      }).catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+      return true;
+
+    case 'learnPattern':
+      // Forward to native host via a temporary connection
+      (async () => {
+        try {
+          const port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+          let resolved = false;
+
+          const cleanup = () => {
+            if (!resolved) {
+              resolved = true;
+              port.disconnect();
+            }
+          };
+
+          port.onMessage.addListener((response) => {
+            if (response.type === 'pattern_learned' || response.type === 'error') {
+              sendResponse(response);
+              cleanup();
+            } else if (response.type === 'ready') {
+              // Engine ready, send learn request
+              port.postMessage({
+                type: 'learn_pattern',
+                audio: message.audio,
+                patternType: message.patternType,
+                name: message.name
+              });
+            }
+          });
+
+          port.onDisconnect.addListener(() => {
+            if (!resolved) {
+              sendResponse({ type: 'error', message: 'Native host disconnected' });
+              resolved = true;
+            }
+          });
+
+          // Initialize pattern engine
+          port.postMessage({
+            type: 'init_patterns',
+            patterns: []
+          });
+
+          // Timeout after 60 seconds
+          setTimeout(() => {
+            if (!resolved) {
+              sendResponse({ type: 'error', message: 'Timeout learning pattern' });
+              cleanup();
+            }
+          }, 60000);
+
+        } catch (error) {
+          sendResponse({ type: 'error', message: error.message });
+        }
+      })();
+      return true;
+
     default:
       sendResponse({ error: 'Unknown action' });
   }
@@ -498,6 +825,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (transcriptionState.has(tabId)) {
     transcriptionState.get(tabId).cleanup();
     transcriptionState.delete(tabId);
+  }
+  if (generationState.has(tabId)) {
+    generationState.get(tabId).cleanup();
+    generationState.delete(tabId);
   }
 });
 

@@ -80,6 +80,12 @@ speech_engine = None
 streaming_engine = None
 _engine_type = 'faster-whisper'  # 'whisper', 'faster-whisper', or 'parakeet'
 
+# Pattern detection engine (lazy load)
+pattern_engine = None
+pattern_detector = None
+_pattern_init_thread = None
+_pattern_init_error = None
+
 
 def read_native_message() -> Optional[dict]:
     """
@@ -339,6 +345,199 @@ def handle_ping(message: dict) -> dict:
     }
 
 
+# ============================================================================
+# Pattern Detection Handlers
+# ============================================================================
+
+def _background_load_pattern_engine():
+    """Load pattern engine in background thread."""
+    global pattern_engine, _pattern_init_error
+    import io
+    import time
+
+    # Wait a moment
+    time.sleep(0.3)
+
+    old_stdout = sys.stdout
+    captured_output = io.StringIO()
+
+    try:
+        log("Loading pattern detection engine...")
+        sys.stdout = captured_output
+
+        from pattern_engine import PatternEngine
+        pattern_engine = PatternEngine(device='cuda')
+
+        sys.stdout = old_stdout
+        log("Pattern engine loaded successfully")
+
+    except Exception as e:
+        sys.stdout = old_stdout
+        _pattern_init_error = str(e)
+        log(f"Pattern engine load error: {e}", 0)
+        log(traceback.format_exc(), 0)
+
+
+def handle_init_patterns(message: dict) -> dict:
+    """Initialize pattern detection with provided patterns."""
+    global pattern_engine, pattern_detector, _pattern_init_thread
+
+    patterns = message.get('patterns', [])
+
+    # Start loading engine in background if not loaded
+    if pattern_engine is None and _pattern_init_thread is None:
+        _pattern_init_thread = threading.Thread(target=_background_load_pattern_engine, daemon=True)
+        _pattern_init_thread.start()
+
+    log(f"Init patterns: {len(patterns)} patterns", 3)
+
+    return {
+        'type': 'patterns_ready',
+        'pattern_count': len(patterns),
+        'status': 'loading' if pattern_engine is None else 'ready'
+    }
+
+
+def handle_learn_pattern(message: dict) -> dict:
+    """Learn a new audio pattern from provided audio segment."""
+    global pattern_engine, _pattern_init_thread, _pattern_init_error
+
+    # Wait for engine if still loading
+    if _pattern_init_thread is not None and _pattern_init_thread.is_alive():
+        log("Waiting for pattern engine to load...", 3)
+        _pattern_init_thread.join(timeout=60)
+
+    if _pattern_init_error is not None:
+        return {
+            'type': 'error',
+            'message': f'Pattern engine initialization failed: {_pattern_init_error}'
+        }
+
+    if pattern_engine is None:
+        return {
+            'type': 'error',
+            'message': 'Pattern engine not initialized'
+        }
+
+    try:
+        audio_base64 = message.get('audio', '')
+        pattern_type = message.get('patternType', 'exact')  # 'exact' or 'semantic'
+        pattern_name = message.get('name', 'Unnamed Pattern')
+
+        audio = pattern_engine.decode_audio(audio_base64)
+        duration = len(audio) / 16000.0  # 16kHz sample rate
+
+        import time
+        pattern_id = f"pattern_{int(time.time() * 1000)}"
+
+        result = {
+            'type': 'pattern_learned',
+            'pattern_id': pattern_id,
+            'name': pattern_name,
+            'patternType': pattern_type,
+            'duration': duration
+        }
+
+        # Generate fingerprint for exact matching
+        if pattern_type == 'exact':
+            fingerprint = pattern_engine.fingerprint(audio)
+            if fingerprint:
+                result['fingerprint'] = fingerprint
+                log(f"Generated fingerprint with {len(fingerprint)} frames")
+            else:
+                log("Fingerprint generation failed, falling back to embedding", 1)
+                pattern_type = 'semantic'
+                result['patternType'] = 'semantic'
+
+        # Generate embedding for semantic matching (always include for fallback)
+        embedding = pattern_engine.embed(audio)
+        if embedding is not None:
+            result['embedding'] = pattern_engine.quantize_embedding(embedding)
+            log(f"Generated embedding with {len(result['embedding'])} dimensions")
+        else:
+            if pattern_type == 'semantic':
+                return {
+                    'type': 'error',
+                    'message': 'Failed to generate embedding for semantic pattern'
+                }
+
+        log(f"Learned pattern: {pattern_name} ({pattern_type}, {duration:.1f}s)")
+        return result
+
+    except Exception as e:
+        log(f"Learn pattern error: {e}", 0)
+        log(traceback.format_exc(), 0)
+        return {
+            'type': 'error',
+            'message': f'Failed to learn pattern: {str(e)}'
+        }
+
+
+def handle_detect(message: dict) -> dict:
+    """Run pattern detection on audio chunk."""
+    global pattern_engine, pattern_detector, _pattern_init_thread, _pattern_init_error
+
+    # Wait for engine if still loading
+    if _pattern_init_thread is not None and _pattern_init_thread.is_alive():
+        _pattern_init_thread.join(timeout=60)
+
+    if _pattern_init_error is not None or pattern_engine is None:
+        return {
+            'type': 'detections',
+            'detections': [],
+            'error': 'Pattern engine not available'
+        }
+
+    try:
+        audio_base64 = message.get('audio', '')
+        timestamp = message.get('timestamp', 0)
+        patterns = message.get('patterns', [])
+
+        # Create detector if needed or update patterns
+        from pattern_engine import PatternDetector
+        if pattern_detector is None:
+            pattern_detector = PatternDetector(pattern_engine, patterns)
+        else:
+            pattern_detector.set_patterns(patterns)
+
+        # Process chunk and get detections
+        detections = pattern_detector.process_chunk(audio_base64, timestamp)
+
+        # Also get confirmed detections (patterns matched for minimum duration)
+        confirmed = pattern_detector.get_confirmed_detections(timestamp)
+
+        if detections:
+            log(f"Detected {len(detections)} patterns at {timestamp:.1f}s")
+
+        return {
+            'type': 'detections',
+            'timestamp': timestamp,
+            'detections': detections,
+            'confirmed': confirmed
+        }
+
+    except Exception as e:
+        log(f"Detection error: {e}", 0)
+        log(traceback.format_exc(), 0)
+        return {
+            'type': 'detections',
+            'detections': [],
+            'error': str(e)
+        }
+
+
+def handle_reset_patterns(message: dict) -> dict:
+    """Reset pattern detection state (e.g., on video seek)."""
+    global pattern_detector
+
+    if pattern_detector:
+        pattern_detector.reset()
+
+    return {
+        'type': 'patterns_reset'
+    }
+
+
 def handle_message(message: dict) -> Optional[dict]:
     """Route message to appropriate handler."""
     msg_type = message.get('type', '')
@@ -348,7 +547,12 @@ def handle_message(message: dict) -> Optional[dict]:
         'transcribe': handle_transcribe,
         'reset': handle_reset,
         'ping': handle_ping,
-        'shutdown': lambda m: {'_shutdown': True}  # Special marker for shutdown
+        'shutdown': lambda m: {'_shutdown': True},  # Special marker for shutdown
+        # Pattern detection handlers
+        'init_patterns': handle_init_patterns,
+        'learn_pattern': handle_learn_pattern,
+        'detect': handle_detect,
+        'reset_patterns': handle_reset_patterns
     }
 
     handler = handlers.get(msg_type)

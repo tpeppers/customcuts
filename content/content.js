@@ -25,6 +25,18 @@
   // Subtitle manager instance
   let subtitleManager = null;
 
+  // Generated subtitles state
+  let generatedSubtitleManager = null;
+  let displayGeneratedSubtitles = false;
+  let generatedSubtitles = [];
+  let subtitleGenerationActive = false;
+
+  // Pattern detection state
+  let patternDetectionEnabled = false;
+  let enabledPatterns = [];
+  let patternDetectionAction = 'skip'; // 'skip' or 'mark'
+  let activePatternSkip = null; // Track if we're in a skip action
+
   // Pop tag state
   let popTagContainer = null;
   let popTags = [];
@@ -181,6 +193,52 @@
   }
 
   // ============================================================================
+  // Generated Subtitle Manager - for pre-recorded subtitles
+  // ============================================================================
+
+  class GeneratedSubtitleManager {
+    constructor(overlay) {
+      this.overlay = overlay;
+      this.segments = [];
+      this.currentSegment = null;
+    }
+
+    setSegments(segments) {
+      // Sort segments by start time
+      this.segments = (segments || []).sort((a, b) => a.start - b.start);
+      this.currentSegment = null;
+    }
+
+    update(currentTime) {
+      if (!this.overlay || this.segments.length === 0) return;
+
+      // Find the segment that should be displayed at current time
+      const activeSegment = this.segments.find(seg =>
+        currentTime >= seg.start && currentTime <= seg.end
+      );
+
+      if (activeSegment && activeSegment !== this.currentSegment) {
+        // New segment to display
+        this.currentSegment = activeSegment;
+        this.overlay.textContent = activeSegment.text;
+        this.overlay.classList.add('visible');
+      } else if (!activeSegment && this.currentSegment) {
+        // No active segment, hide overlay
+        this.currentSegment = null;
+        this.overlay.classList.remove('visible');
+      }
+    }
+
+    clear() {
+      this.currentSegment = null;
+      if (this.overlay) {
+        this.overlay.textContent = '';
+        this.overlay.classList.remove('visible');
+      }
+    }
+  }
+
+  // ============================================================================
   // Video Detection & Setup
   // ============================================================================
 
@@ -271,6 +329,14 @@
 
     // Subtitles always start off - user must explicitly enable each session
     subtitlesEnabled = false;
+
+    // Load generated subtitles if available
+    generatedSubtitles = videoData.generatedSubtitles || [];
+    displayGeneratedSubtitles = videoData.displayGeneratedSubtitles || false;
+    if (generatedSubtitleManager) {
+      generatedSubtitleManager.setSegments(generatedSubtitles);
+    }
+
     autoCloseEnabled = videoData.autoClose || false;
     timedCloseEnabled = videoData.timedClose || false;
     timedCloseTime = videoData.closeTime ? parseTime(videoData.closeTime) : 0;
@@ -442,8 +508,9 @@
     subtitleOverlay.className = 'custom-cuts-subtitle-overlay';
     document.body.appendChild(subtitleOverlay);
 
-    // Initialize subtitle manager
+    // Initialize subtitle managers
     subtitleManager = new SubtitleManager(subtitleOverlay);
+    generatedSubtitleManager = new GeneratedSubtitleManager(subtitleOverlay);
 
     // Handle fullscreen changes - move overlay into fullscreen element
     document.addEventListener('fullscreenchange', handleFullscreenChange);
@@ -530,6 +597,178 @@
       }
     } catch (error) {
       console.error('Failed to stop transcription:', error);
+    }
+  }
+
+  // ============================================================================
+  // Subtitle Generation (Full Video)
+  // ============================================================================
+
+  let generationCollectedSegments = [];
+
+  async function startSubtitleGeneration() {
+    if (subtitleGenerationActive) {
+      return { success: false, error: 'Generation already in progress' };
+    }
+
+    if (!videoElement) {
+      return { success: false, error: 'No video found' };
+    }
+
+    try {
+      subtitleGenerationActive = true;
+      generationCollectedSegments = [];
+
+      // Show notification
+      showNotification('Starting subtitle generation...');
+
+      // Start subtitle generation session via background
+      const response = await chrome.runtime.sendMessage({
+        action: 'startSubtitleGeneration',
+        duration: videoElement.duration
+      });
+
+      if (response.success) {
+        return { success: true };
+      } else {
+        subtitleGenerationActive = false;
+        return { success: false, error: response.error };
+      }
+
+    } catch (error) {
+      console.error('Failed to start subtitle generation:', error);
+      subtitleGenerationActive = false;
+      return { success: false, error: error.message };
+    }
+  }
+
+  async function handleGeneratedSegment(segments, chunkId) {
+    if (!subtitleGenerationActive) return;
+
+    // Collect segments
+    if (segments && segments.length > 0) {
+      generationCollectedSegments.push(...segments);
+
+      // Notify popup of progress
+      chrome.runtime.sendMessage({
+        action: 'subtitleGenerationProgress',
+        count: generationCollectedSegments.length
+      });
+    }
+  }
+
+  async function finishSubtitleGeneration(success, error) {
+    subtitleGenerationActive = false;
+
+    if (success && generationCollectedSegments.length > 0) {
+      // Save generated subtitles to storage
+      const videoId = getVideoId();
+      const data = await chrome.storage.local.get(videoId);
+      const videoData = data[videoId] || {};
+
+      videoData.generatedSubtitles = generationCollectedSegments;
+      await chrome.storage.local.set({ [videoId]: videoData });
+
+      // Update local state
+      generatedSubtitles = generationCollectedSegments;
+      if (generatedSubtitleManager) {
+        generatedSubtitleManager.setSegments(generatedSubtitles);
+      }
+
+      showNotification(`Generated ${generationCollectedSegments.length} subtitle segments`);
+
+      // Notify popup of completion
+      chrome.runtime.sendMessage({
+        action: 'subtitleGenerationComplete',
+        success: true,
+        count: generationCollectedSegments.length
+      });
+    } else {
+      showNotification(error || 'Subtitle generation failed');
+
+      chrome.runtime.sendMessage({
+        action: 'subtitleGenerationComplete',
+        success: false,
+        error: error || 'Generation failed'
+      });
+    }
+
+    generationCollectedSegments = [];
+  }
+
+  // ============================================================================
+  // Pattern Detection Handlers
+  // ============================================================================
+
+  function handlePatternDetection(detection, timestamp) {
+    /**
+     * Handle a detected audio pattern.
+     * @param {object} detection - Detection info from native host
+     * @param {number} timestamp - Video timestamp where pattern was detected
+     */
+    if (!detection || !videoElement) return;
+
+    const patternName = detection.pattern_name || 'Unknown';
+    const patternDuration = detection.pattern_duration || 10;
+
+    console.log(`[Pattern] Detected "${patternName}" at ${timestamp?.toFixed(1)}s, action: ${patternDetectionAction}`);
+
+    if (patternDetectionAction === 'skip') {
+      // Skip past the pattern
+      const skipTo = timestamp + patternDuration;
+      if (skipTo > videoElement.currentTime) {
+        videoElement.currentTime = skipTo;
+        showNotification(`Skipped: ${patternName}`);
+      }
+    } else if (patternDetectionAction === 'mark') {
+      // Create an auto-tag for this pattern
+      createPatternTag(patternName, timestamp, timestamp + patternDuration);
+    }
+  }
+
+  async function createPatternTag(patternName, startTime, endTime) {
+    /**
+     * Create an auto-tag for a detected pattern.
+     */
+    try {
+      const videoId = getVideoId();
+      const data = await chrome.storage.local.get(videoId);
+      const videoData = data[videoId] || {};
+      const tags = videoData.tags || [];
+
+      // Check if we already have a similar tag (avoid duplicates)
+      const existingSimilar = tags.find(t =>
+        t.name === patternName &&
+        Math.abs(t.startTime - startTime) < 2 &&
+        Math.abs(t.endTime - endTime) < 2
+      );
+
+      if (existingSimilar) {
+        console.log(`[Pattern] Tag already exists for "${patternName}" at ${startTime.toFixed(1)}s`);
+        return;
+      }
+
+      // Create new tag
+      const newTag = {
+        name: patternName,
+        startTime: startTime,
+        endTime: endTime,
+        autoDetected: true,
+        createdAt: Date.now()
+      };
+
+      tags.push(newTag);
+      videoData.tags = tags;
+      await chrome.storage.local.set({ [videoId]: videoData });
+
+      // Update local state
+      videoTags = tags;
+
+      showNotification(`Tagged: ${patternName}`);
+      console.log(`[Pattern] Created tag for "${patternName}" at ${startTime.toFixed(1)}-${endTime.toFixed(1)}s`);
+
+    } catch (error) {
+      console.error('[Pattern] Failed to create tag:', error);
     }
   }
 
@@ -826,9 +1065,11 @@
 
     const currentTime = videoElement.currentTime;
 
-    // Update subtitles
+    // Update subtitles (live or generated)
     if (subtitlesEnabled && subtitleManager) {
       subtitleManager.update(currentTime);
+    } else if (displayGeneratedSubtitles && generatedSubtitleManager) {
+      generatedSubtitleManager.update(currentTime);
     }
 
     // Update pop tags
@@ -1001,7 +1242,51 @@
 
       case 'toggleSubtitles':
         subtitlesEnabled = message.enabled;
+        // When enabling live subtitles, disable generated subtitles display
+        if (message.enabled && displayGeneratedSubtitles) {
+          displayGeneratedSubtitles = false;
+          if (generatedSubtitleManager) {
+            generatedSubtitleManager.clear();
+          }
+        }
         updateSubtitleVisibility();
+        sendResponse({ success: true });
+        break;
+
+      case 'generateSubtitles':
+        if (subtitleGenerationActive) {
+          sendResponse({ success: false, error: 'Generation already in progress' });
+        } else {
+          startSubtitleGeneration().then(result => {
+            sendResponse(result);
+          });
+        }
+        return true;
+
+      case 'toggleGeneratedSubtitles':
+        displayGeneratedSubtitles = message.enabled;
+        // When enabling generated subtitles, disable live subtitles
+        if (message.enabled && subtitlesEnabled) {
+          subtitlesEnabled = false;
+          updateSubtitleVisibility();
+        }
+        if (!message.enabled && generatedSubtitleManager) {
+          generatedSubtitleManager.clear();
+        }
+        sendResponse({ success: true });
+        break;
+
+      case 'updatePatternDetection':
+        enabledPatterns = message.patterns || [];
+        patternDetectionAction = message.detectionAction || 'skip';
+        patternDetectionEnabled = enabledPatterns.length > 0;
+        console.log(`[Pattern] Detection ${patternDetectionEnabled ? 'enabled' : 'disabled'} with ${enabledPatterns.length} patterns, action: ${patternDetectionAction}`);
+        sendResponse({ success: true });
+        break;
+
+      case 'patternDetected':
+        // Handle detected pattern
+        handlePatternDetection(message.detection, message.timestamp);
         sendResponse({ success: true });
         break;
 
@@ -1090,6 +1375,18 @@
         } else {
           console.log('[Subtitles] Missing subtitleManager or segments:', !!subtitleManager, !!message.segments);
         }
+        break;
+
+      case 'generationResult':
+        // Handle subtitle generation segment
+        if (subtitleGenerationActive && message.segments) {
+          handleGeneratedSegment(message.segments, message.chunkId);
+        }
+        break;
+
+      case 'generationComplete':
+        // Subtitle generation finished
+        finishSubtitleGeneration(message.success, message.error);
         break;
 
       case 'transcriptionError':

@@ -194,8 +194,41 @@
         <label class="toggle">
           <input type="checkbox" id="subtitles-toggle">
           <span class="slider"></span>
-          <span class="label-text">Enable Subtitles</span>
+          <span class="label-text">Real Time Ad-hoc Subtitles</span>
         </label>
+        <div class="generate-subtitles-row">
+          <button id="generate-subtitles-btn" class="btn btn-secondary">Generate Subtitles</button>
+          <span id="generate-subtitles-status" class="generate-status"></span>
+        </div>
+        <label class="toggle generated-subtitles-toggle">
+          <input type="checkbox" id="display-generated-toggle" disabled>
+          <span class="slider"></span>
+          <span class="label-text">Display Generated Subtitles</span>
+          <span id="generated-indicator" class="generated-indicator">[none]</span>
+        </label>
+      </div>
+
+      <div class="control-group">
+        <h3>Pattern Matching</h3>
+        <div id="pattern-list" class="pattern-list">
+          <p class="empty-text" id="no-patterns-text">No patterns learned</p>
+        </div>
+        <div class="pattern-action-row">
+          <label>When detected:</label>
+          <select id="pattern-action-select">
+            <option value="skip">Skip (seek past pattern)</option>
+            <option value="mark">Mark (auto-tag only)</option>
+          </select>
+        </div>
+        <div class="pattern-learn-row">
+          <input type="text" id="pattern-name-input" placeholder="Pattern name">
+          <select id="pattern-type-select">
+            <option value="exact">Exact Match</option>
+            <option value="semantic">Similar Audio</option>
+          </select>
+        </div>
+        <button id="learn-pattern-btn" class="btn btn-secondary">Learn Pattern from Range</button>
+        <span id="learn-pattern-status" class="learn-status"></span>
       </div>
     </section>
 
