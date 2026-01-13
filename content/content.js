@@ -26,9 +26,9 @@
   let subtitleManager = null;
 
   // Pop tag state
-  let popTagOverlay = null;
+  let popTagContainer = null;
   let popTags = [];
-  let currentPopTagText = null;
+  let activePopTagElements = new Map(); // Maps tag id to DOM element
 
   // Display settings
   let subtitleStyle = null;
@@ -449,8 +449,8 @@
         fullscreenElement.appendChild(subtitleOverlay);
         console.log('[Subtitles] Moved overlay to fullscreen element');
       }
-      if (popTagOverlay) {
-        fullscreenElement.appendChild(popTagOverlay);
+      if (popTagContainer) {
+        fullscreenElement.appendChild(popTagContainer);
       }
     } else {
       // Exiting fullscreen - move overlays back to body
@@ -458,8 +458,8 @@
         document.body.appendChild(subtitleOverlay);
         console.log('[Subtitles] Moved overlay back to body');
       }
-      if (popTagOverlay) {
-        document.body.appendChild(popTagOverlay);
+      if (popTagContainer) {
+        document.body.appendChild(popTagContainer);
       }
     }
   }
@@ -528,23 +528,23 @@
   // ============================================================================
 
   function createPopTagOverlay() {
-    if (popTagOverlay) return;
+    if (popTagContainer) return;
 
-    popTagOverlay = document.createElement('div');
-    popTagOverlay.id = 'custom-cuts-pop-tag';
-    popTagOverlay.className = 'custom-cuts-pop-tag';
-    document.body.appendChild(popTagOverlay);
+    popTagContainer = document.createElement('div');
+    popTagContainer.id = 'custom-cuts-pop-tag-container';
+    popTagContainer.className = 'custom-cuts-pop-tag-container';
+    document.body.appendChild(popTagContainer);
   }
 
   function handlePopTagFullscreen() {
-    if (!popTagOverlay) return;
+    if (!popTagContainer) return;
 
     const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
 
     if (fullscreenElement) {
-      fullscreenElement.appendChild(popTagOverlay);
+      fullscreenElement.appendChild(popTagContainer);
     } else {
-      document.body.appendChild(popTagOverlay);
+      document.body.appendChild(popTagContainer);
     }
   }
 
@@ -564,25 +564,69 @@
   }
 
   function updatePopTagDisplay() {
-    if (!videoElement || !popTagOverlay) return;
+    if (!videoElement || !popTagContainer) return;
 
     const currentTime = videoElement.currentTime;
-    const activePopTag = popTags.find(tag =>
+
+    // Find all pop tags that should be active at current time
+    const activePopTags = popTags.filter(tag =>
       currentTime >= tag.startTime && currentTime <= tag.endTime
     );
 
-    if (activePopTag && activePopTag.popText !== currentPopTagText) {
-      popTagOverlay.textContent = activePopTag.popText;
-      popTagOverlay.classList.add('visible');
-      currentPopTagText = activePopTag.popText;
+    // Create a unique ID for each pop tag based on its properties
+    const getTagId = (tag) => `${tag.startTime}-${tag.popText}`;
 
-      // Play sound if enabled
-      if (popTagStyle && popTagStyle.soundEnabled && soundPlayer) {
-        soundPlayer.play(popTagStyle.soundType || 'chime');
+    // Track which tags are currently active
+    const currentActiveIds = new Set(activePopTags.map(getTagId));
+
+    // Remove pop tags that are no longer active
+    for (const [tagId, element] of activePopTagElements) {
+      if (!currentActiveIds.has(tagId)) {
+        // Fade out and remove
+        element.classList.remove('visible');
+        element.classList.add('fade-out');
+        setTimeout(() => {
+          if (element.parentNode) {
+            element.parentNode.removeChild(element);
+          }
+        }, 300);
+        activePopTagElements.delete(tagId);
       }
-    } else if (!activePopTag && currentPopTagText !== null) {
-      popTagOverlay.classList.remove('visible');
-      currentPopTagText = null;
+    }
+
+    // Add new pop tags that just became active
+    for (const tag of activePopTags) {
+      const tagId = getTagId(tag);
+      if (!activePopTagElements.has(tagId)) {
+        // Create new pop tag element
+        const element = document.createElement('div');
+        element.className = 'custom-cuts-pop-tag';
+        element.textContent = tag.popText;
+
+        // Apply styles
+        if (popTagStyle) {
+          element.style.fontSize = (popTagStyle.fontSize || 28) + 'px';
+          element.style.color = popTagStyle.textColor || '#ffffff';
+          element.style.backgroundColor = hexToRgba(
+            popTagStyle.backgroundColor || '#000000',
+            90
+          );
+        }
+
+        // Add to container (new tags appear at bottom)
+        popTagContainer.appendChild(element);
+        activePopTagElements.set(tagId, element);
+
+        // Trigger animation after a frame
+        requestAnimationFrame(() => {
+          element.classList.add('visible');
+        });
+
+        // Play sound if enabled
+        if (popTagStyle && popTagStyle.soundEnabled && soundPlayer) {
+          soundPlayer.play(popTagStyle.soundType || 'chime');
+        }
+      }
     }
   }
 
@@ -635,14 +679,17 @@
   }
 
   function applyPopTagStyles() {
-    if (!popTagOverlay || !popTagStyle) return;
+    if (!popTagStyle) return;
 
-    popTagOverlay.style.fontSize = (popTagStyle.fontSize || 28) + 'px';
-    popTagOverlay.style.color = popTagStyle.textColor || '#ffffff';
-    popTagOverlay.style.backgroundColor = hexToRgba(
-      popTagStyle.backgroundColor || '#000000',
-      90
-    );
+    // Apply styles to all active pop tag elements
+    for (const element of activePopTagElements.values()) {
+      element.style.fontSize = (popTagStyle.fontSize || 28) + 'px';
+      element.style.color = popTagStyle.textColor || '#ffffff';
+      element.style.backgroundColor = hexToRgba(
+        popTagStyle.backgroundColor || '#000000',
+        90
+      );
+    }
   }
 
   function getVideoId() {
