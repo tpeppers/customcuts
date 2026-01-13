@@ -8,7 +8,11 @@
     "activeTab",
     "tabs",
     "commands",
-    "bookmarks"
+    "bookmarks",
+    "nativeMessaging",
+    "tabCapture",
+    "offscreen",
+    "alarms"
   ],
   "host_permissions": [
     "<all_urls>"

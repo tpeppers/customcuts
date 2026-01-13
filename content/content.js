@@ -22,6 +22,82 @@
   let queueEndTime = null; // Time at which video should "end" and move to next
   let queueEndTriggered = false; // Prevent multiple triggers
 
+  // Subtitle manager instance
+  let subtitleManager = null;
+
+  // Transcription state
+  let transcriptionActive = false;
+  let lastVideoTimeUpdate = 0;
+
+  // ============================================================================
+  // Subtitle Manager
+  // ============================================================================
+
+  class SubtitleManager {
+    constructor(overlay) {
+      this.overlay = overlay;
+      this.currentText = '';
+      this.hideTimeout = null;
+      this.displayDuration = 5000; // How long to show each subtitle (ms)
+    }
+
+    addSegments(segments) {
+      // Live mode: display transcription immediately as it arrives
+      if (!segments || segments.length === 0) return;
+
+      // Combine all segment text
+      const text = segments.map(s => s.text).join(' ').trim();
+      if (!text) return;
+
+      console.log(`[Subtitles] Showing live: "${text.substring(0, 50)}..."`);
+      this.showText(text);
+    }
+
+    showText(text) {
+      if (!this.overlay) return;
+
+      // Clear any pending hide
+      if (this.hideTimeout) {
+        clearTimeout(this.hideTimeout);
+      }
+
+      // Show the subtitle
+      this.currentText = text;
+      this.overlay.textContent = text;
+      this.overlay.classList.add('visible');
+
+      // Auto-hide after display duration
+      this.hideTimeout = setTimeout(() => {
+        this.overlay.classList.remove('visible');
+      }, this.displayDuration);
+    }
+
+    update(currentTime) {
+      // Not needed for live mode - subtitles display immediately when received
+    }
+
+    clear() {
+      if (this.hideTimeout) {
+        clearTimeout(this.hideTimeout);
+        this.hideTimeout = null;
+      }
+      this.currentText = '';
+      if (this.overlay) {
+        this.overlay.textContent = '';
+        this.overlay.classList.remove('visible');
+      }
+    }
+
+    handleSeek(newTime) {
+      // For live transcription, just clear on seek since we'll get fresh audio
+      this.clear();
+    }
+  }
+
+  // ============================================================================
+  // Video Detection & Setup
+  // ============================================================================
+
   function findVideo() {
     const videos = document.querySelectorAll('video');
     if (videos.length > 0 && videos.length < 4) {
@@ -48,6 +124,11 @@
     videoElement.addEventListener('timeupdate', handleTimeUpdate);
     videoElement.addEventListener('ended', handleVideoEnded);
 
+    // Video state listeners for transcription sync
+    videoElement.addEventListener('play', handleVideoPlay);
+    videoElement.addEventListener('pause', handleVideoPause);
+    videoElement.addEventListener('seeked', handleVideoSeeked);
+
     const observer = new MutationObserver(() => {
       const newVideo = findVideo();
       if (newVideo !== videoElement) {
@@ -61,12 +142,46 @@
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
+  function handleVideoPlay() {
+    if (transcriptionActive) {
+      chrome.runtime.sendMessage({
+        action: 'videoStateChange',
+        state: 'play',
+        currentTime: videoElement.currentTime
+      });
+    }
+  }
+
+  function handleVideoPause() {
+    if (transcriptionActive) {
+      chrome.runtime.sendMessage({
+        action: 'videoStateChange',
+        state: 'pause',
+        currentTime: videoElement.currentTime
+      });
+    }
+  }
+
+  function handleVideoSeeked() {
+    if (subtitleManager) {
+      subtitleManager.handleSeek(videoElement.currentTime);
+    }
+    if (transcriptionActive) {
+      chrome.runtime.sendMessage({
+        action: 'videoStateChange',
+        state: 'seek',
+        currentTime: videoElement.currentTime
+      });
+    }
+  }
+
   async function loadVideoSettings() {
     const videoId = `video_${window.location.href}`;
     const data = await chrome.storage.local.get(videoId);
     const videoData = data[videoId] || {};
 
-    subtitlesEnabled = videoData.subtitlesEnabled || false;
+    // Subtitles always start off - user must explicitly enable each session
+    subtitlesEnabled = false;
     autoCloseEnabled = videoData.autoClose || false;
     timedCloseEnabled = videoData.timedClose || false;
     timedCloseTime = videoData.closeTime ? parseTime(videoData.closeTime) : 0;
@@ -171,7 +286,7 @@
     if (!pendingQueueSeek || !videoElement) {
       console.log("Queue seek ended early");
       return;
-      
+
     }
 
     const { targetTime, retryCount, maxRetries } = pendingQueueSeek;
@@ -223,6 +338,10 @@
     return 0;
   }
 
+  // ============================================================================
+  // Subtitle Overlay
+  // ============================================================================
+
   function createSubtitleOverlay() {
     if (subtitleOverlay) return;
 
@@ -230,13 +349,73 @@
     subtitleOverlay.id = 'custom-cuts-subtitles';
     subtitleOverlay.className = 'custom-cuts-subtitle-overlay';
     document.body.appendChild(subtitleOverlay);
+
+    // Initialize subtitle manager
+    subtitleManager = new SubtitleManager(subtitleOverlay);
   }
 
   function updateSubtitleVisibility() {
-    if (subtitleOverlay) {
-      subtitleOverlay.style.display = subtitlesEnabled ? 'block' : 'none';
+    // Start or stop transcription based on subtitle state
+    if (subtitlesEnabled && !transcriptionActive) {
+      startTranscription();
+    } else if (!subtitlesEnabled && transcriptionActive) {
+      stopTranscription();
+      // Clear subtitles when disabled
+      if (subtitleManager) {
+        subtitleManager.clear();
+      }
     }
   }
+
+  async function startTranscription() {
+    try {
+      const response = await chrome.runtime.sendMessage({ action: 'startTranscription' });
+      if (response.success) {
+        transcriptionActive = true;
+        showNotification('Starting transcription...');
+        // Send initial video time so timestamps are correct
+        if (videoElement) {
+          chrome.runtime.sendMessage({
+            action: 'updateVideoTime',
+            currentTime: videoElement.currentTime
+          });
+          console.log(`[Subtitles] Started transcription at videoTime=${videoElement.currentTime.toFixed(1)}`);
+        }
+        // Show brief test subtitle to confirm overlay is working
+        if (subtitleOverlay) {
+          subtitleOverlay.textContent = 'Subtitles starting...';
+          subtitleOverlay.classList.add('visible');
+          setTimeout(() => {
+            if (subtitleOverlay.textContent === 'Subtitles starting...') {
+              subtitleOverlay.classList.remove('visible');
+              subtitleOverlay.textContent = '';
+            }
+          }, 2000);
+        }
+      } else {
+        showNotification(`Transcription error: ${response.error}`);
+      }
+    } catch (error) {
+      console.error('Failed to start transcription:', error);
+      showNotification('Failed to start transcription');
+    }
+  }
+
+  async function stopTranscription() {
+    try {
+      await chrome.runtime.sendMessage({ action: 'stopTranscription' });
+      transcriptionActive = false;
+      if (subtitleManager) {
+        subtitleManager.clear();
+      }
+    } catch (error) {
+      console.error('Failed to stop transcription:', error);
+    }
+  }
+
+  // ============================================================================
+  // Playback Modes
+  // ============================================================================
 
   function updatePlaybackRanges() {
     skipRanges = [];
@@ -274,6 +453,20 @@
     if (!videoElement) return;
 
     const currentTime = videoElement.currentTime;
+
+    // Update subtitles
+    if (subtitlesEnabled && subtitleManager) {
+      subtitleManager.update(currentTime);
+    }
+
+    // Periodically update video time for transcription sync (every 5 seconds)
+    if (transcriptionActive && currentTime - lastVideoTimeUpdate > 5) {
+      lastVideoTimeUpdate = currentTime;
+      chrome.runtime.sendMessage({
+        action: 'updateVideoTime',
+        currentTime: currentTime
+      });
+    }
 
     // Check for queue end mode - trigger "video ended" at the Action End point
     if (queueEndTime !== null && !queueEndTriggered && currentTime >= queueEndTime) {
@@ -385,6 +578,10 @@
     }
   }
 
+  // ============================================================================
+  // Notifications
+  // ============================================================================
+
   function showNotification(message) {
     const notification = document.createElement('div');
     notification.className = 'custom-cuts-notification';
@@ -402,6 +599,10 @@
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   }
+
+  // ============================================================================
+  // Message Handlers
+  // ============================================================================
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.action) {
@@ -468,13 +669,40 @@
         sendResponse({ success: true });
         break;
 
+      // Transcription messages from background
+      case 'transcriptionStatus':
+        if (message.status === 'ready') {
+          showNotification(`Whisper ready (${message.model} on ${message.device})`);
+        } else if (message.status === 'disconnected') {
+          transcriptionActive = false;
+          showNotification(`Transcription disconnected: ${message.error || 'unknown'}`);
+        }
+        break;
+
+      case 'transcriptionResult':
+        console.log('[Subtitles] transcriptionResult received:', message.text?.substring(0, 50), 'segments:', message.segments?.length);
+        if (subtitleManager && message.segments) {
+          subtitleManager.addSegments(message.segments);
+        } else {
+          console.log('[Subtitles] Missing subtitleManager or segments:', !!subtitleManager, !!message.segments);
+        }
+        break;
+
+      case 'transcriptionError':
+        console.error('Transcription error:', message.error);
+        // Don't show notification for every error to avoid spam
+        break;
+
       default:
         sendResponse({ error: 'Unknown action' });
     }
     return false;
   });
 
-  // Keyboard hotkey handler
+  // ============================================================================
+  // Keyboard Shortcuts
+  // ============================================================================
+
   document.addEventListener('keydown', (e) => {
     // Ctrl+Shift+A: Jump to "Action Start" tag
     if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'a') {
@@ -518,6 +746,10 @@
       showNotification('No Action Start tag found.');
     }
   }
+
+  // ============================================================================
+  // Initialization
+  // ============================================================================
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initVideo);

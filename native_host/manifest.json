@@ -1,0 +1,9 @@
+{
+  "name": "com.customcuts.whisper_host",
+  "description": "CustomCuts Whisper Speech-to-Text Host",
+  "path": "C:\\code\\customcuts\\native_host\\whisper_host.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://ddcenadmljglhbkcenbodbbjhpmhehln/"
+  ]
+}

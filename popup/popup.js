@@ -160,7 +160,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const data = await chrome.storage.local.get(videoId);
     const videoData = data[videoId] || {};
 
-    subtitlesToggle.checked = videoData.subtitlesEnabled || false;
+    // Subtitles always start off - user must explicitly enable each session
+    subtitlesToggle.checked = false;
     autoCloseToggle.checked = videoData.autoClose || false;
     timedCloseToggle.checked = videoData.timedClose || false;
     closeTimeInput.value = videoData.closeTime || '';
