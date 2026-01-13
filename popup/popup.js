@@ -28,6 +28,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const ratingStars = document.getElementById('rating-stars');
   const currentRatingDisplay = document.getElementById('current-rating-display');
   const allRatingsDisplay = document.getElementById('all-ratings-display');
+  const feedbackText = document.getElementById('feedback-text');
   const managerBtn = document.getElementById('manager-btn');
   const optionsBtn = document.getElementById('options-btn');
 
@@ -181,6 +182,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       ratings.P1 = videoData.rating;
     }
     updateRatingDisplay(ratings);
+
+    // Load feedback
+    feedbackText.value = videoData.feedback || '';
 
     const tags = videoData.tags || [];
     renderTags(tags);
@@ -791,6 +795,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     updateRatingDisplay(ratings);
+  });
+
+  // Save feedback on blur
+  feedbackText.addEventListener('blur', async () => {
+    await saveVideoData({ feedback: feedbackText.value });
   });
 
   managerBtn.addEventListener('click', () => {

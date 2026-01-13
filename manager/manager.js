@@ -22,6 +22,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const modalRatingPerson = document.getElementById('modal-rating-person');
   const modalRatingStars = document.getElementById('modal-rating-stars');
   const modalAllRatings = document.getElementById('modal-all-ratings');
+  const modalFeedbackText = document.getElementById('modal-feedback-text');
   const modalTagsList = document.getElementById('modal-tags-list');
   const modalTagName = document.getElementById('modal-tag-name');
   const modalIntensity = document.getElementById('modal-intensity');
@@ -189,6 +190,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           ratings: ratings,
           avgRating: calculateAvgRating(ratings),
           tags: value.tags || [],
+          feedback: value.feedback || '',
           lastTagged: getLastTaggedTime(value.tags)
         });
       }
@@ -430,6 +432,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             `).join('')}
             ${video.tags.length > 8 ? `<span class="tag-chip">+${video.tags.length - 8} more</span>` : ''}
           </div>
+          ${video.feedback ? `<div class="video-feedback">${video.feedback}</div>` : ''}
         </div>
         <div class="video-actions">
           <button class="btn btn-primary edit-btn" data-id="${video.id}">Edit Tags</button>
@@ -466,6 +469,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     updateModalRatings(ratings);
+
+    // Load feedback
+    modalFeedbackText.value = videoData.feedback || '';
 
     // Render tags
     renderModalTags(videoData.tags || []);
@@ -2115,6 +2121,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       updateModalRatings(ratings);
       await loadAllVideos();
     });
+  });
+
+  // Modal feedback blur - save on change
+  modalFeedbackText.addEventListener('blur', async () => {
+    const data = await chrome.storage.local.get(currentEditVideoId);
+    const videoData = data[currentEditVideoId] || {};
+    await chrome.storage.local.set({ [currentEditVideoId]: { ...videoData, feedback: modalFeedbackText.value } });
+    await loadAllVideos();
   });
 
   async function submitModalTag() {

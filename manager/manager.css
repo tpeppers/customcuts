@@ -559,6 +559,44 @@ h3 {
   background: #e8f4fc;
 }
 
+.modal-feedback-container {
+  margin-top: 15px;
+}
+
+.modal-feedback-container label {
+  display: block;
+  font-size: 13px;
+  color: #666;
+  margin-bottom: 6px;
+}
+
+.modal-feedback-container textarea {
+  width: 100%;
+  min-height: 80px;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.modal-feedback-container textarea:focus {
+  outline: none;
+  border-color: #3498db;
+}
+
+.video-feedback {
+  font-size: 11px;
+  color: #666;
+  font-style: italic;
+  margin-top: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .video-ratings-summary {
   display: flex;
   flex-wrap: wrap;
