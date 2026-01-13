@@ -352,6 +352,26 @@
 
     // Initialize subtitle manager
     subtitleManager = new SubtitleManager(subtitleOverlay);
+
+    // Handle fullscreen changes - move overlay into fullscreen element
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+  }
+
+  function handleFullscreenChange() {
+    if (!subtitleOverlay) return;
+
+    const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+
+    if (fullscreenElement) {
+      // Entering fullscreen - move overlay into fullscreen element
+      fullscreenElement.appendChild(subtitleOverlay);
+      console.log('[Subtitles] Moved overlay to fullscreen element');
+    } else {
+      // Exiting fullscreen - move overlay back to body
+      document.body.appendChild(subtitleOverlay);
+      console.log('[Subtitles] Moved overlay back to body');
+    }
   }
 
   function updateSubtitleVisibility() {
