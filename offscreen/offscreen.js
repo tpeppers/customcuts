@@ -10,7 +10,8 @@ let isCapturing = false;
 let isPaused = false;
 let audioPlayback = null; // Audio element for playback
 
-const CHUNK_DURATION = 5; // seconds - smaller chunks for better latency
+const CHUNK_DURATION = 10; // seconds - larger chunks for better context
+const OVERLAP_DURATION = 2; // seconds - overlap between chunks to avoid cutting mid-sentence
 const SAMPLE_RATE = 16000; // Whisper expects 16kHz
 
 // Listen for messages from the service worker
@@ -123,25 +124,35 @@ function resample(inputData, inputSampleRate, outputSampleRate) {
 }
 
 function sendAudioChunk() {
-  // Get chunk samples
-  const chunkSamples = audioBuffer.splice(0, SAMPLE_RATE * CHUNK_DURATION);
+  const chunkSamples = SAMPLE_RATE * CHUNK_DURATION;
+  const overlapSamples = SAMPLE_RATE * OVERLAP_DURATION;
+
+  // Get the full chunk including what will become overlap for next chunk
+  const samplesNeeded = chunkSamples;
+  const samplesToSend = audioBuffer.slice(0, samplesNeeded);
+
+  // Keep overlap samples for the next chunk (don't remove them from buffer)
+  // Only remove the non-overlapping portion
+  const samplesToRemove = chunkSamples - overlapSamples;
+  audioBuffer.splice(0, samplesToRemove);
   bufferDuration = audioBuffer.length / SAMPLE_RATE;
 
   // Convert to PCM16
-  const pcm16 = new Int16Array(chunkSamples.length);
-  for (let i = 0; i < chunkSamples.length; i++) {
-    pcm16[i] = Math.max(-32768, Math.min(32767, Math.floor(chunkSamples[i] * 32767)));
+  const pcm16 = new Int16Array(samplesToSend.length);
+  for (let i = 0; i < samplesToSend.length; i++) {
+    pcm16[i] = Math.max(-32768, Math.min(32767, Math.floor(samplesToSend[i] * 32767)));
   }
 
   // Encode as base64
   const bytes = new Uint8Array(pcm16.buffer);
   const base64 = arrayBufferToBase64(bytes);
 
-  // Send to service worker
+  // Send to service worker with overlap info
   chrome.runtime.sendMessage({
     action: 'audioChunk',
     audio: base64,
-    duration: CHUNK_DURATION
+    duration: CHUNK_DURATION,
+    overlap: OVERLAP_DURATION
   });
 }
 

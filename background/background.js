@@ -3,7 +3,9 @@ const DEFAULT_SETTINGS = {
   fastForwardLarge: 30,
   rewindSmall: 10,
   tagClusters: {},
+  speechEngine: 'faster-whisper',  // 'whisper', 'faster-whisper', or 'parakeet'
   whisperModel: 'large-v3',
+  parakeetModel: 'nvidia/parakeet-tdt-0.6b-v3',
   whisperLanguage: 'en'
 };
 
@@ -150,14 +152,19 @@ class TranscriptionSession {
         this.handleDisconnect(error?.message);
       });
 
-      // Initialize Whisper
+      // Initialize speech engine (Whisper, Faster-Whisper, or Parakeet)
       const settings = await getSettings();
+      const engine = settings.speechEngine || 'faster-whisper';
+      const model = engine === 'parakeet' ? settings.parakeetModel : settings.whisperModel;
+
       this.nativePort.postMessage({
         type: 'init',
-        model: settings.whisperModel,
+        engine: engine,
+        model: model,
         device: 'cuda',
         language: settings.whisperLanguage
       });
+      console.log(`[Transcription] Initializing ${engine} with model ${model}`);
 
       // Start audio capture via offscreen document
       await this.startAudioCapture();

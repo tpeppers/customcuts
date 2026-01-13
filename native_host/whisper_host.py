@@ -74,9 +74,11 @@ except Exception as e:
     log(f"Import error: {e}", 0)
     raise
 
-# Import Whisper engine (lazy load to speed up startup)
-whisper_engine = None
-streaming_whisper = None
+# Import speech engine (lazy load to speed up startup)
+# Supports Whisper, Faster-Whisper, and Parakeet engines
+speech_engine = None
+streaming_engine = None
+_engine_type = 'faster-whisper'  # 'whisper', 'faster-whisper', or 'parakeet'
 
 
 def read_native_message() -> Optional[dict]:
@@ -157,9 +159,9 @@ _init_device = None
 _init_thread = None
 _init_error = None
 
-def _background_load_whisper():
-    """Load Whisper in background thread."""
-    global whisper_engine, streaming_whisper, _init_error
+def _background_load_engine():
+    """Load speech engine in background thread."""
+    global speech_engine, streaming_engine, _init_error, _engine_type
     import io
     import time
 
@@ -171,18 +173,27 @@ def _background_load_whisper():
     captured_output = io.StringIO()
 
     try:
-        log(f"Loading Whisper model: {_init_model} on {_init_device}")
+        log(f"Loading {_engine_type} model: {_init_model} on {_init_device}")
 
         # Redirect stdout for the import and init
         sys.stdout = captured_output
 
-        from whisper_engine import WhisperEngine, StreamingWhisper
-        whisper_engine = WhisperEngine(model_name=_init_model, device=_init_device)
-        streaming_whisper = StreamingWhisper(whisper_engine)
+        if _engine_type == 'parakeet':
+            from parakeet_engine import ParakeetEngine, StreamingParakeet
+            speech_engine = ParakeetEngine(model_name=_init_model, device=_init_device)
+            streaming_engine = StreamingParakeet(speech_engine)
+        elif _engine_type == 'faster-whisper':
+            from faster_whisper_engine import FasterWhisperEngine, StreamingFasterWhisper
+            speech_engine = FasterWhisperEngine(model_name=_init_model, device=_init_device)
+            streaming_engine = StreamingFasterWhisper(speech_engine)
+        else:
+            from whisper_engine import WhisperEngine, StreamingWhisper
+            speech_engine = WhisperEngine(model_name=_init_model, device=_init_device)
+            streaming_engine = StreamingWhisper(speech_engine)
 
         # Restore stdout before logging success
         sys.stdout = old_stdout
-        log("Whisper loaded successfully")
+        log(f"{_engine_type} loaded successfully")
 
         # Log any captured output at debug level
         captured = captured_output.getvalue()
@@ -191,25 +202,34 @@ def _background_load_whisper():
     except Exception as e:
         sys.stdout = old_stdout
         _init_error = str(e)
-        log(f"Whisper load error: {e}", 0)
+        log(f"{_engine_type} load error: {e}", 0)
         log(traceback.format_exc(), 0)
 
 def handle_init(message: dict) -> dict:
-    """Handle initialization request - start loading Whisper in background."""
-    global _init_model, _init_device, _init_thread
+    """Handle initialization request - start loading speech engine in background."""
+    global _init_model, _init_device, _init_thread, _engine_type
 
-    _init_model = message.get('model', 'large-v3')
+    _engine_type = message.get('engine', 'faster-whisper')  # 'whisper', 'faster-whisper', or 'parakeet'
+
+    # Set default model based on engine type
+    if _engine_type == 'parakeet':
+        _init_model = message.get('model', 'nvidia/parakeet-tdt-0.6b-v3')
+    else:
+        # Both whisper and faster-whisper use the same model names
+        _init_model = message.get('model', 'large-v3')
+
     _init_device = message.get('device', 'cuda')
 
     # Start loading in background thread
-    _init_thread = threading.Thread(target=_background_load_whisper, daemon=True)
+    _init_thread = threading.Thread(target=_background_load_engine, daemon=True)
     _init_thread.start()
 
-    log(f"Init: model={_init_model}, device={_init_device}", 3)
+    log(f"Init: engine={_engine_type}, model={_init_model}, device={_init_device}", 3)
 
     # Return ready immediately - transcription will wait for model
     return {
         'type': 'ready',
+        'engine': _engine_type,
         'model': _init_model,
         'device': _init_device,
         'status': 'loading'  # Indicate still loading
@@ -221,7 +241,7 @@ _transcribe_thread = None
 
 def _transcription_worker():
     """Background worker for transcription."""
-    global streaming_whisper, _init_thread, _init_error
+    global streaming_engine, _init_thread, _init_error
 
     while True:
         try:
@@ -244,7 +264,7 @@ def _transcription_worker():
                 })
                 continue
 
-            if streaming_whisper is None:
+            if streaming_engine is None:
                 send_native_message({
                     'type': 'error',
                     'message': 'Engine not initialized',
@@ -258,7 +278,7 @@ def _transcription_worker():
             language = message.get('language', 'en')
 
             log(f"Processing chunk {chunk_id}", 3)
-            segments = streaming_whisper.process_chunk(audio_base64, timestamp, language)
+            segments = streaming_engine.process_chunk(audio_base64, timestamp, language)
             full_text = ' '.join(seg['text'] for seg in segments)
 
             if full_text.strip():
@@ -301,10 +321,10 @@ def handle_transcribe(message: dict) -> dict:
 
 def handle_reset(message: dict) -> dict:
     """Handle reset request (e.g., on video seek)."""
-    global streaming_whisper
+    global streaming_engine
 
-    if streaming_whisper:
-        streaming_whisper.reset()
+    if streaming_engine:
+        streaming_engine.reset()
 
     return {
         'type': 'reset_complete'
@@ -315,7 +335,7 @@ def handle_ping(message: dict) -> dict:
     """Handle ping request for health check."""
     return {
         'type': 'pong',
-        'initialized': whisper_engine is not None
+        'initialized': speech_engine is not None
     }
 
 

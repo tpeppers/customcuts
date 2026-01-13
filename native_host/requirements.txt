@@ -1,3 +1,10 @@
+# Whisper (default)
 openai-whisper>=20231117
+
+# NVIDIA Parakeet TDT (faster, more accurate alternative)
+# Uncomment to use Parakeet instead of Whisper:
+# nemo_toolkit[asr]>=2.0.0
+
+# Common dependencies
 torch>=2.0.0
 numpy>=1.24.0
