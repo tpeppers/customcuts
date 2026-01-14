@@ -6,6 +6,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const ratingPersonFilter = document.getElementById('rating-person-filter');
   const ratingFilter = document.getElementById('rating-filter');
   const sortBy = document.getElementById('sort-by');
+  const tagLengthMode = document.getElementById('tag-length-mode');
+  const tagLengthMin = document.getElementById('tag-length-min');
   const videoCount = document.getElementById('video-count');
   const tagCount = document.getElementById('tag-count');
   const videoList = document.getElementById('video-list');
@@ -151,6 +153,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const liveGeneratedRatingPerson = document.getElementById('live-generated-rating-person');
   const liveGeneratedRatingFilter = document.getElementById('live-generated-rating-filter');
   const liveGeneratedSortBy = document.getElementById('live-generated-sort-by');
+  const liveGeneratedTagLengthMode = document.getElementById('live-generated-tag-length-mode');
+  const liveGeneratedTagLengthMin = document.getElementById('live-generated-tag-length-min');
   const liveGeneratedPreviewCount = document.getElementById('live-generated-preview-count');
   const deleteLiveGeneratedBtn = document.getElementById('delete-live-generated-btn');
   const saveLiveGeneratedBtn = document.getElementById('save-live-generated-btn');
@@ -364,6 +368,19 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     }
 
+    // Tag length filter (filter videos that have at least one tag longer than specified duration)
+    if (filters.tagLengthMode === 'longer' && filters.tagLengthMin) {
+      filtered = filtered.filter(video => {
+        return video.tags.some(tag => {
+          if (tag.startTime !== undefined && tag.endTime !== undefined) {
+            const tagDuration = tag.endTime - tag.startTime;
+            return tagDuration > filters.tagLengthMin;
+          }
+          return false;
+        });
+      });
+    }
+
     // Rating filter
     if (filters.minRating) {
       const minRating = parseInt(filters.minRating);
@@ -407,6 +424,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       includeTags: [...selectedIncludeTags],
       excludeTags: [...selectedExcludeTags],
       includeTagsMode: includeTagsMode,
+      tagLengthMode: tagLengthMode.value,
+      tagLengthMin: parseTime(tagLengthMin.value),
       ratingPerson: ratingPersonFilter.value,
       minRating: ratingFilter.value,
       sortBy: sortBy.value
@@ -421,6 +440,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       includeTags: [...selectedIncludeTags],
       excludeTags: [...selectedExcludeTags],
       includeTagsMode: includeTagsMode,
+      tagLengthMode: tagLengthMode.value,
+      tagLengthMin: parseTime(tagLengthMin.value),
       ratingPerson: ratingPersonFilter.value,
       minRating: ratingFilter.value,
       sortBy: sortBy.value
@@ -658,6 +679,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (startTime !== null && endTime !== null) {
       newTag.startTime = Math.min(startTime, endTime);
       newTag.endTime = Math.max(startTime, endTime);
+    }
+
+    // Check for duplicate tag (same name, intensity, and time range)
+    const isDuplicate = tags.some(existing => {
+      const sameName = existing.name.toLowerCase() === tagName.toLowerCase();
+      const sameIntensity = (existing.intensity || 0) === (newTag.intensity || 0);
+      const sameTimeRange = (existing.startTime === newTag.startTime) && (existing.endTime === newTag.endTime);
+      return sameName && sameIntensity && sameTimeRange;
+    });
+
+    if (isDuplicate) {
+      return; // No-op for duplicate tags
     }
 
     tags.push(newTag);
@@ -1071,6 +1104,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       parts.push(`-${filters.excludeTags.slice(0, 2).join(', ')}${filters.excludeTags.length > 2 ? '...' : ''}`);
     }
 
+    if (filters.tagLengthMode === 'longer' && filters.tagLengthMin) {
+      parts.push(`>${formatTime(filters.tagLengthMin)}`);
+    }
+
     if (filters.minRating) {
       const ratingPerson = filters.ratingPerson === 'avg' ? '' : ` ${filters.ratingPerson}`;
       parts.push(`${filters.minRating}+${ratingPerson}`);
@@ -1263,6 +1300,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       includeTags: [...liveGeneratedSelectedIncludeTags],
       excludeTags: [...liveGeneratedSelectedExcludeTags],
       includeTagsMode: liveGeneratedIncludeTagsMode,
+      tagLengthMode: liveGeneratedTagLengthMode.value,
+      tagLengthMin: parseTime(liveGeneratedTagLengthMin.value),
       ratingPerson: liveGeneratedRatingPerson.value,
       minRating: liveGeneratedRatingFilter.value,
       sortBy: liveGeneratedSortBy.value
@@ -1289,6 +1328,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       liveGeneratedSelectedIncludeTags = new Set(playlist.filters.includeTags || []);
       liveGeneratedSelectedExcludeTags = new Set(playlist.filters.excludeTags || []);
       liveGeneratedIncludeTagsMode = playlist.filters.includeTagsMode || 'AND';
+      liveGeneratedTagLengthMode.value = playlist.filters.tagLengthMode || 'any';
+      liveGeneratedTagLengthMin.value = playlist.filters.tagLengthMin ? formatTime(playlist.filters.tagLengthMin) : '';
       liveGeneratedRatingPerson.value = playlist.filters.ratingPerson || 'avg';
       liveGeneratedRatingFilter.value = playlist.filters.minRating || '';
       liveGeneratedSortBy.value = playlist.filters.sortBy || 'recent';
@@ -1305,6 +1346,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       liveGeneratedSelectedIncludeTags = new Set(currentFilters.includeTags || []);
       liveGeneratedSelectedExcludeTags = new Set(currentFilters.excludeTags || []);
       liveGeneratedIncludeTagsMode = currentFilters.includeTagsMode || 'AND';
+      liveGeneratedTagLengthMode.value = currentFilters.tagLengthMode || 'any';
+      liveGeneratedTagLengthMin.value = currentFilters.tagLengthMin ? formatTime(currentFilters.tagLengthMin) : '';
       liveGeneratedRatingPerson.value = currentFilters.ratingPerson || 'avg';
       liveGeneratedRatingFilter.value = currentFilters.minRating || '';
       liveGeneratedSortBy.value = currentFilters.sortBy || 'recent';
@@ -1315,6 +1358,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Update mode toggle display
     liveGeneratedModeToggle.textContent = liveGeneratedIncludeTagsMode;
     liveGeneratedModeToggle.classList.toggle('or-mode', liveGeneratedIncludeTagsMode === 'OR');
+
+    // Update tag length filter visibility
+    if (liveGeneratedTagLengthMode.value === 'longer') {
+      liveGeneratedTagLengthMin.classList.remove('hidden');
+    } else {
+      liveGeneratedTagLengthMin.classList.add('hidden');
+    }
 
     updateLiveGeneratedTagFilters();
     updateLiveGeneratedPreview();
@@ -2492,6 +2542,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   ratingFilter.addEventListener('change', renderVideos);
   sortBy.addEventListener('change', renderVideos);
 
+  // Tag length filter
+  tagLengthMode.addEventListener('change', () => {
+    if (tagLengthMode.value === 'longer') {
+      tagLengthMin.classList.remove('hidden');
+    } else {
+      tagLengthMin.classList.add('hidden');
+      tagLengthMin.value = '';
+    }
+    renderVideos();
+  });
+  tagLengthMin.addEventListener('input', renderVideos);
+
   // AND/OR toggle for include tags
   includeModeToggle.addEventListener('click', () => {
     includeTagsMode = includeTagsMode === 'AND' ? 'OR' : 'AND';
@@ -2653,6 +2715,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   liveGeneratedRatingPerson.addEventListener('change', updateLiveGeneratedPreview);
   liveGeneratedRatingFilter.addEventListener('change', updateLiveGeneratedPreview);
   liveGeneratedSortBy.addEventListener('change', updateLiveGeneratedPreview);
+
+  // Live Generated tag length filter
+  liveGeneratedTagLengthMode.addEventListener('change', () => {
+    if (liveGeneratedTagLengthMode.value === 'longer') {
+      liveGeneratedTagLengthMin.classList.remove('hidden');
+    } else {
+      liveGeneratedTagLengthMin.classList.add('hidden');
+      liveGeneratedTagLengthMin.value = '';
+    }
+    updateLiveGeneratedPreview();
+  });
+  liveGeneratedTagLengthMin.addEventListener('input', updateLiveGeneratedPreview);
 
   liveGeneratedModeToggle.addEventListener('click', () => {
     liveGeneratedIncludeTagsMode = liveGeneratedIncludeTagsMode === 'AND' ? 'OR' : 'AND';

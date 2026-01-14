@@ -201,6 +201,26 @@ h3 {
   }
 }
 
+.tag-length-filter-row {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e9ecef;
+}
+
+.tag-length-input {
+  width: 70px;
+  padding: 6px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.tag-length-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .filter-sort-row {
   display: flex;
   gap: 20px;

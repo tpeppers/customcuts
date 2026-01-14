@@ -38,6 +38,16 @@
             <div id="exclude-tags" class="tag-filter-chips"></div>
           </div>
         </div>
+        <div class="tag-length-filter-row">
+          <div class="filter-group">
+            <label>Tag length:</label>
+            <select id="tag-length-mode">
+              <option value="any">Any length</option>
+              <option value="longer">Longer than</option>
+            </select>
+            <input type="text" id="tag-length-min" class="tag-length-input hidden" placeholder="m:ss">
+          </div>
+        </div>
       </div>
 
       <div class="filter-sort-row">
@@ -429,6 +439,17 @@
             <div class="live-generated-filter-group">
               <label>Exclude tags:</label>
               <div id="live-generated-exclude-tags" class="tag-filter-chips"></div>
+            </div>
+
+            <div class="live-generated-filter-group">
+              <label>Tag length:</label>
+              <div class="tag-length-inline">
+                <select id="live-generated-tag-length-mode">
+                  <option value="any">Any length</option>
+                  <option value="longer">Longer than</option>
+                </select>
+                <input type="text" id="live-generated-tag-length-min" class="tag-length-input hidden" placeholder="m:ss">
+              </div>
             </div>
 
             <div class="live-generated-filter-row">

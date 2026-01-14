@@ -266,7 +266,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     return /^[A-Za-z0-9\s]+$/.test(name) && name.length <= 128;
   }
 
-  async function getTopTags(limit = 10) {
+  async function getTopTags(limit = 20) {
     const data = await chrome.storage.local.get(null);
     const tagCounts = new Map();
 
@@ -745,6 +745,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       tagEndTime = popTagStartTime + 3;
     }
 
+    // Check for duplicate pop tag (same text and time range)
+    const isDuplicate = tags.some(existing => {
+      return existing.popText === text &&
+             existing.startTime === tagStartTime &&
+             existing.endTime === tagEndTime;
+    });
+
+    if (isDuplicate) {
+      popTagDialog.classList.add('hidden');
+      popTagText.value = '';
+      popTagStartTime = null;
+      return; // No-op for duplicate pop tags
+    }
+
     tags.push({
       name: 'Pop',
       startTime: tagStartTime,
@@ -800,6 +814,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (startTime !== null && endTime !== null) {
       newTag.startTime = Math.min(startTime, endTime);
       newTag.endTime = Math.max(startTime, endTime);
+    }
+
+    // Check for duplicate tag (same name, intensity, and time range)
+    const isDuplicate = tags.some(existing => {
+      const sameName = existing.name.toLowerCase() === tagName.toLowerCase();
+      const sameIntensity = (existing.intensity || 0) === (newTag.intensity || 0);
+      const sameTimeRange = (existing.startTime === newTag.startTime) && (existing.endTime === newTag.endTime);
+      return sameName && sameIntensity && sameTimeRange;
+    });
+
+    if (isDuplicate) {
+      return; // No-op for duplicate tags
     }
 
     tags.push(newTag);
