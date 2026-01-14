@@ -675,12 +675,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     return /^[A-Za-z0-9\s]+$/.test(name) && name.length <= 128;
   }
 
+  // Special tags to exclude from Quick Tags list
+  const EXCLUDED_QUICK_TAGS = new Set(['action start', 'action end', 'volume']);
+
   function getTopTags(videos, limit = 20) {
     const tagCounts = new Map();
 
     videos.forEach(video => {
       video.tags.forEach(tag => {
         const name = tag.name.toLowerCase();
+        // Exclude special tags and pop-up tags
+        if (EXCLUDED_QUICK_TAGS.has(name) || tag.popText) {
+          return;
+        }
         tagCounts.set(name, (tagCounts.get(name) || 0) + 1);
       });
     });
@@ -693,7 +700,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function renderQuickTags() {
-    const topTags = getTopTags(allVideos);
+    const topTags = getTopTags(allVideos, 20);
 
     if (topTags.length === 0) {
       quickTagsContainer.innerHTML = '<span class="empty-text">No tags yet</span>';
