@@ -71,6 +71,7 @@
             <option value="recent">Recently Tagged</option>
             <option value="rating">Highest Rated</option>
             <option value="tags">Most Tags</option>
+            <option value="least-tags">Least Tags</option>
             <option value="alpha">Alphabetical (URL)</option>
           </select>
         </div>
@@ -81,6 +82,7 @@
       <span id="video-count">0 videos</span>
       <span id="tag-count">0 total tags</span>
       <button id="add-filtered-to-playlist-btn" class="btn btn-secondary stats-btn">Add filtered to playlist...</button>
+      <button id="add-filters-to-live-playlist-btn" class="btn btn-secondary stats-btn">Add filters to Live Generated Playlist...</button>
     </section>
 
     <section id="video-list" class="video-list">
@@ -107,6 +109,17 @@
 
       <section id="playlist-list" class="playlist-list">
         <p class="empty-state">No playlists yet. Create one above!</p>
+      </section>
+
+      <section class="live-generated-section">
+        <h3>Live Generated Playlists</h3>
+        <p class="section-description">These playlists regenerate from saved filters each time they're played.</p>
+        <section class="stats-bar">
+          <span id="live-generated-count">0 live generated playlists</span>
+        </section>
+        <section id="live-generated-playlist-list" class="playlist-list">
+          <p class="empty-state">No live generated playlists yet.</p>
+        </section>
       </section>
     </div>
 
@@ -150,6 +163,7 @@
               <option value="alpha">Alphabetical</option>
               <option value="rating">Highest Rated</option>
               <option value="tags">Most Tags</option>
+              <option value="least-tags">Least Tags</option>
             </select>
           </div>
         </div>
@@ -381,6 +395,89 @@
               <p class="empty-text">No playlists available</p>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal for creating/editing Live Generated Playlist -->
+    <div id="live-generated-modal" class="modal hidden">
+      <div class="modal-content modal-large">
+        <div class="modal-header">
+          <h2 id="live-generated-modal-title">Create Live Generated Playlist</h2>
+          <button id="close-live-generated-modal" class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="live-generated-name-edit">
+            <label>Playlist Name:</label>
+            <input type="text" id="live-generated-name-input" placeholder="Enter playlist name..." maxlength="100">
+          </div>
+
+          <div class="modal-section">
+            <h3>Filter Settings</h3>
+            <p class="section-description">Videos matching these filters will be included when this playlist is played.</p>
+
+            <div class="live-generated-filter-group">
+              <label>Search:</label>
+              <input type="text" id="live-generated-search" placeholder="Search by URL, title, or tag...">
+            </div>
+
+            <div class="live-generated-filter-group">
+              <label>Must have tags (<span id="live-generated-mode-toggle" class="mode-toggle">AND</span>):</label>
+              <div id="live-generated-include-tags" class="tag-filter-chips"></div>
+            </div>
+
+            <div class="live-generated-filter-group">
+              <label>Exclude tags:</label>
+              <div id="live-generated-exclude-tags" class="tag-filter-chips"></div>
+            </div>
+
+            <div class="live-generated-filter-row">
+              <div class="filter-group">
+                <label>Rating by:</label>
+                <select id="live-generated-rating-person">
+                  <option value="avg">Average</option>
+                  <option value="P1">P1</option>
+                  <option value="P2">P2</option>
+                  <option value="P3">P3</option>
+                  <option value="P4">P4</option>
+                </select>
+              </div>
+
+              <div class="filter-group">
+                <label>Min rating:</label>
+                <select id="live-generated-rating-filter">
+                  <option value="">Any</option>
+                  <option value="5">5 stars</option>
+                  <option value="4">4+</option>
+                  <option value="3">3+</option>
+                  <option value="2">2+</option>
+                  <option value="1">1+</option>
+                  <option value="0">Unrated</option>
+                </select>
+              </div>
+
+              <div class="filter-group">
+                <label>Sort by:</label>
+                <select id="live-generated-sort-by">
+                  <option value="recent">Recently Tagged</option>
+                  <option value="rating">Highest Rated</option>
+                  <option value="tags">Most Tags</option>
+                  <option value="least-tags">Least Tags</option>
+                  <option value="alpha">Alphabetical (URL)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="modal-section">
+            <div class="live-generated-preview">
+              <span id="live-generated-preview-count">0 videos currently match these filters</span>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="delete-live-generated-btn" class="btn btn-danger hidden">Delete</button>
+          <button id="save-live-generated-btn" class="btn btn-primary">Save</button>
         </div>
       </div>
     </div>

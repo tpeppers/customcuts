@@ -134,6 +134,34 @@ document.addEventListener('DOMContentLoaded', async () => {
   let currentEditPlaylistId = null;
   let currentPlaylistVideos = [];
 
+  // Live Generated Playlist elements
+  const liveGeneratedPlaylistList = document.getElementById('live-generated-playlist-list');
+  const liveGeneratedCount = document.getElementById('live-generated-count');
+  const addFiltersToLivePlaylistBtn = document.getElementById('add-filters-to-live-playlist-btn');
+
+  // Live Generated Playlist modal elements
+  const liveGeneratedModal = document.getElementById('live-generated-modal');
+  const closeLiveGeneratedModalBtn = document.getElementById('close-live-generated-modal');
+  const liveGeneratedModalTitle = document.getElementById('live-generated-modal-title');
+  const liveGeneratedNameInput = document.getElementById('live-generated-name-input');
+  const liveGeneratedSearch = document.getElementById('live-generated-search');
+  const liveGeneratedIncludeTags = document.getElementById('live-generated-include-tags');
+  const liveGeneratedExcludeTags = document.getElementById('live-generated-exclude-tags');
+  const liveGeneratedModeToggle = document.getElementById('live-generated-mode-toggle');
+  const liveGeneratedRatingPerson = document.getElementById('live-generated-rating-person');
+  const liveGeneratedRatingFilter = document.getElementById('live-generated-rating-filter');
+  const liveGeneratedSortBy = document.getElementById('live-generated-sort-by');
+  const liveGeneratedPreviewCount = document.getElementById('live-generated-preview-count');
+  const deleteLiveGeneratedBtn = document.getElementById('delete-live-generated-btn');
+  const saveLiveGeneratedBtn = document.getElementById('save-live-generated-btn');
+
+  // Live Generated Playlist state
+  let allLiveGeneratedPlaylists = [];
+  let currentEditLiveGeneratedIndex = null;
+  let liveGeneratedSelectedIncludeTags = new Set();
+  let liveGeneratedSelectedExcludeTags = new Set();
+  let liveGeneratedIncludeTagsMode = 'AND';
+
   // Tab navigation
   tabButtons.forEach(btn => {
     btn.addEventListener('click', () => {
@@ -151,6 +179,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       } else if (tab === 'playlists') {
         playlistsTab.classList.add('active');
         loadPlaylists();
+        loadLiveGeneratedPlaylists();
       } else if (tab === 'bookmarks') {
         bookmarksTab.classList.add('active');
         loadBookmarks();
@@ -287,12 +316,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  function filterAndSortVideos() {
-    let filtered = [...allVideos];
+  // Helper function to get video rating with explicit person filter parameter
+  function getVideoRatingByPerson(video, personFilter) {
+    if (personFilter === 'avg') {
+      return video.avgRating;
+    } else {
+      return video.ratings[personFilter] || 0;
+    }
+  }
+
+  // Reusable filter function that can be used by both UI filters and live generated playlists
+  function applyFiltersToVideos(videos, filters) {
+    let filtered = [...videos];
 
     // Search filter
-    const searchTerm = searchInput.value.toLowerCase().trim();
-    if (searchTerm) {
+    if (filters.searchTerm) {
+      const searchTerm = filters.searchTerm.toLowerCase().trim();
       filtered = filtered.filter(video => {
         const urlMatch = video.url.toLowerCase().includes(searchTerm);
         const titleMatch = video.title.toLowerCase().includes(searchTerm);
@@ -304,48 +343,54 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // Include tag filter (AND = must have ALL, OR = must have ANY)
-    if (selectedIncludeTags.size > 0) {
+    if (filters.includeTags && filters.includeTags.length > 0) {
+      const includeTags = new Set(filters.includeTags.map(t => t.toLowerCase()));
       filtered = filtered.filter(video => {
         const videoTagNames = new Set(video.tags.map(t => t.name.toLowerCase()));
-        if (includeTagsMode === 'AND') {
-          return [...selectedIncludeTags].every(tag => videoTagNames.has(tag));
+        if (filters.includeTagsMode === 'AND') {
+          return [...includeTags].every(tag => videoTagNames.has(tag));
         } else {
-          return [...selectedIncludeTags].some(tag => videoTagNames.has(tag));
+          return [...includeTags].some(tag => videoTagNames.has(tag));
         }
       });
     }
 
     // Exclude tag filter (must NOT have ANY of these tags)
-    if (selectedExcludeTags.size > 0) {
+    if (filters.excludeTags && filters.excludeTags.length > 0) {
+      const excludeTags = new Set(filters.excludeTags.map(t => t.toLowerCase()));
       filtered = filtered.filter(video => {
         const videoTagNames = new Set(video.tags.map(t => t.name.toLowerCase()));
-        return ![...selectedExcludeTags].some(tag => videoTagNames.has(tag));
+        return ![...excludeTags].some(tag => videoTagNames.has(tag));
       });
     }
 
     // Rating filter
-    const ratingValue = ratingFilter.value;
-    if (ratingValue) {
-      const minRating = parseInt(ratingValue);
+    if (filters.minRating) {
+      const minRating = parseInt(filters.minRating);
+      const personFilter = filters.ratingPerson || 'avg';
       if (minRating === 0) {
         // Unrated - no ratings at all for the selected person/avg
-        filtered = filtered.filter(video => getVideoRatingForFilter(video) === 0);
+        filtered = filtered.filter(video => getVideoRatingByPerson(video, personFilter) === 0);
       } else {
-        filtered = filtered.filter(video => getVideoRatingForFilter(video) >= minRating);
+        filtered = filtered.filter(video => getVideoRatingByPerson(video, personFilter) >= minRating);
       }
     }
 
     // Sort
-    const sortValue = sortBy.value;
+    const sortValue = filters.sortBy || 'recent';
+    const personFilter = filters.ratingPerson || 'avg';
     switch (sortValue) {
       case 'recent':
         filtered.sort((a, b) => b.lastTagged - a.lastTagged);
         break;
       case 'rating':
-        filtered.sort((a, b) => getVideoRatingForFilter(b) - getVideoRatingForFilter(a));
+        filtered.sort((a, b) => getVideoRatingByPerson(b, personFilter) - getVideoRatingByPerson(a, personFilter));
         break;
       case 'tags':
         filtered.sort((a, b) => b.tags.length - a.tags.length);
+        break;
+      case 'least-tags':
+        filtered.sort((a, b) => a.tags.length - b.tags.length);
         break;
       case 'alpha':
         filtered.sort((a, b) => a.title.localeCompare(b.title));
@@ -353,6 +398,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     return filtered;
+  }
+
+  function filterAndSortVideos() {
+    // Build filters object from UI state
+    const filters = {
+      searchTerm: searchInput.value,
+      includeTags: [...selectedIncludeTags],
+      excludeTags: [...selectedExcludeTags],
+      includeTagsMode: includeTagsMode,
+      ratingPerson: ratingPersonFilter.value,
+      minRating: ratingFilter.value,
+      sortBy: sortBy.value
+    };
+    return applyFiltersToVideos(allVideos, filters);
+  }
+
+  // Get current UI filter state as an object (for creating live generated playlists)
+  function getCurrentFiltersState() {
+    return {
+      searchTerm: searchInput.value,
+      includeTags: [...selectedIncludeTags],
+      excludeTags: [...selectedExcludeTags],
+      includeTagsMode: includeTagsMode,
+      ratingPerson: ratingPersonFilter.value,
+      minRating: ratingFilter.value,
+      sortBy: sortBy.value
+    };
   }
 
   function formatTime(seconds) {
@@ -963,6 +1035,327 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.tabs.create({ url: firstVideo.url });
   }
 
+  // ==================== LIVE GENERATED PLAYLIST FUNCTIONS ====================
+
+  async function loadLiveGeneratedPlaylists() {
+    await loadPacksData();
+    const data = await chrome.storage.local.get('liveGeneratedPlaylists');
+    allLiveGeneratedPlaylists = data.liveGeneratedPlaylists || [];
+    renderLiveGeneratedPlaylists();
+  }
+
+  async function saveLiveGeneratedPlaylists() {
+    await chrome.storage.local.set({ liveGeneratedPlaylists: allLiveGeneratedPlaylists });
+  }
+
+  function getLiveGeneratedPlaylistsForCurrentPack() {
+    return allLiveGeneratedPlaylists.filter(p => itemBelongsToPack(p, currentPack));
+  }
+
+  function formatFilterSummary(filters) {
+    const parts = [];
+
+    if (filters.includeTags && filters.includeTags.length > 0) {
+      const mode = filters.includeTagsMode || 'AND';
+      parts.push(`${filters.includeTags.slice(0, 3).join(', ')}${filters.includeTags.length > 3 ? '...' : ''} (${mode})`);
+    }
+
+    if (filters.excludeTags && filters.excludeTags.length > 0) {
+      parts.push(`-${filters.excludeTags.slice(0, 2).join(', ')}${filters.excludeTags.length > 2 ? '...' : ''}`);
+    }
+
+    if (filters.minRating) {
+      const ratingPerson = filters.ratingPerson === 'avg' ? '' : ` ${filters.ratingPerson}`;
+      parts.push(`${filters.minRating}+${ratingPerson}`);
+    }
+
+    if (filters.searchTerm) {
+      parts.push(`"${filters.searchTerm.substring(0, 15)}${filters.searchTerm.length > 15 ? '...' : ''}"`);
+    }
+
+    return parts.length > 0 ? parts.join(' | ') : 'No filters';
+  }
+
+  function renderLiveGeneratedPlaylists() {
+    const packPlaylists = getLiveGeneratedPlaylistsForCurrentPack();
+    liveGeneratedCount.textContent = `${packPlaylists.length} live generated playlist${packPlaylists.length !== 1 ? 's' : ''}`;
+
+    if (packPlaylists.length === 0) {
+      liveGeneratedPlaylistList.innerHTML = '<p class="empty-state">No live generated playlists yet.</p>';
+      return;
+    }
+
+    const playlistsWithIndex = packPlaylists.map(playlist => ({
+      playlist,
+      originalIndex: allLiveGeneratedPlaylists.indexOf(playlist)
+    }));
+
+    liveGeneratedPlaylistList.innerHTML = playlistsWithIndex.map(({ playlist, originalIndex }) => `
+      <div class="playlist-card live-generated-card" data-index="${originalIndex}">
+        <div class="playlist-info">
+          <h4>${escapeHtml(playlist.name)}</h4>
+          <span class="playlist-meta filter-summary">${escapeHtml(formatFilterSummary(playlist.filters))}</span>
+        </div>
+        <div class="playlist-actions">
+          <button class="btn btn-success play-live-generated-btn" data-index="${originalIndex}">Play</button>
+          <button class="btn btn-secondary shuffle-live-generated-btn" data-index="${originalIndex}">Shuffle</button>
+          <button class="btn btn-primary edit-live-generated-btn" data-index="${originalIndex}">Edit</button>
+        </div>
+      </div>
+    `).join('');
+
+    liveGeneratedPlaylistList.querySelectorAll('.edit-live-generated-btn').forEach(btn => {
+      btn.addEventListener('click', () => openLiveGeneratedModal(parseInt(btn.dataset.index)));
+    });
+
+    liveGeneratedPlaylistList.querySelectorAll('.play-live-generated-btn').forEach(btn => {
+      btn.addEventListener('click', () => playLiveGeneratedPlaylist(parseInt(btn.dataset.index)));
+    });
+
+    liveGeneratedPlaylistList.querySelectorAll('.shuffle-live-generated-btn').forEach(btn => {
+      btn.addEventListener('click', () => playLiveGeneratedPlaylistShuffled(parseInt(btn.dataset.index)));
+    });
+  }
+
+  async function createLiveGeneratedPlaylist(name, filters) {
+    const playlist = {
+      id: Date.now().toString(),
+      name: name,
+      filters: filters,
+      createdAt: Date.now(),
+      packs: [currentPack]
+    };
+    allLiveGeneratedPlaylists.push(playlist);
+    await saveLiveGeneratedPlaylists();
+    renderLiveGeneratedPlaylists();
+  }
+
+  async function playLiveGeneratedPlaylist(index) {
+    const playlist = allLiveGeneratedPlaylists[index];
+    if (!playlist) {
+      alert('Live generated playlist not found.');
+      return;
+    }
+
+    // Apply filters to get current matching videos
+    const matchingVideos = applyFiltersToVideos(allVideos, playlist.filters);
+
+    if (matchingVideos.length === 0) {
+      alert('No videos currently match this playlist\'s filters.');
+      return;
+    }
+
+    // Create queue from matching videos
+    const queue = matchingVideos.map(v => ({
+      url: v.url,
+      title: v.title
+    }));
+
+    // Save queue to storage
+    await chrome.storage.local.set({ videoQueue: queue });
+
+    // Navigate to first video
+    const firstVideo = queue[0];
+    chrome.tabs.create({ url: firstVideo.url });
+  }
+
+  async function playLiveGeneratedPlaylistShuffled(index) {
+    const playlist = allLiveGeneratedPlaylists[index];
+    if (!playlist) {
+      alert('Live generated playlist not found.');
+      return;
+    }
+
+    // Apply filters to get current matching videos
+    const matchingVideos = applyFiltersToVideos(allVideos, playlist.filters);
+
+    if (matchingVideos.length === 0) {
+      alert('No videos currently match this playlist\'s filters.');
+      return;
+    }
+
+    // Create shuffled queue from matching videos
+    const queue = shuffleArray(matchingVideos.map(v => ({
+      url: v.url,
+      title: v.title
+    })));
+
+    // Save queue to storage
+    await chrome.storage.local.set({ videoQueue: queue });
+
+    // Navigate to first video
+    const firstVideo = queue[0];
+    chrome.tabs.create({ url: firstVideo.url });
+  }
+
+  function getAllTagsForLiveGeneratedModal() {
+    const allTags = new Set();
+    allVideos.forEach(video => {
+      video.tags.forEach(tag => allTags.add(tag.name.toLowerCase()));
+    });
+    return [...allTags].sort();
+  }
+
+  function updateLiveGeneratedTagFilters() {
+    const sortedTags = getAllTagsForLiveGeneratedModal();
+
+    liveGeneratedIncludeTags.innerHTML = sortedTags.map(tag => `
+      <button class="filter-tag-chip ${liveGeneratedSelectedIncludeTags.has(tag) ? 'active' : ''}" data-tag="${tag}">
+        ${tag}
+      </button>
+    `).join('') || '<span class="empty-text">No tags available</span>';
+
+    liveGeneratedExcludeTags.innerHTML = sortedTags.map(tag => `
+      <button class="filter-tag-chip exclude ${liveGeneratedSelectedExcludeTags.has(tag) ? 'active' : ''}" data-tag="${tag}">
+        ${tag}
+      </button>
+    `).join('') || '<span class="empty-text">No tags available</span>';
+
+    // Add click handlers for include tags
+    liveGeneratedIncludeTags.querySelectorAll('.filter-tag-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const tag = chip.dataset.tag;
+        if (liveGeneratedSelectedIncludeTags.has(tag)) {
+          liveGeneratedSelectedIncludeTags.delete(tag);
+          chip.classList.remove('active');
+        } else {
+          liveGeneratedSelectedIncludeTags.add(tag);
+          chip.classList.add('active');
+          if (liveGeneratedSelectedExcludeTags.has(tag)) {
+            liveGeneratedSelectedExcludeTags.delete(tag);
+            liveGeneratedExcludeTags.querySelector(`[data-tag="${tag}"]`)?.classList.remove('active');
+          }
+        }
+        updateLiveGeneratedPreview();
+      });
+    });
+
+    // Add click handlers for exclude tags
+    liveGeneratedExcludeTags.querySelectorAll('.filter-tag-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const tag = chip.dataset.tag;
+        if (liveGeneratedSelectedExcludeTags.has(tag)) {
+          liveGeneratedSelectedExcludeTags.delete(tag);
+          chip.classList.remove('active');
+        } else {
+          liveGeneratedSelectedExcludeTags.add(tag);
+          chip.classList.add('active');
+          if (liveGeneratedSelectedIncludeTags.has(tag)) {
+            liveGeneratedSelectedIncludeTags.delete(tag);
+            liveGeneratedIncludeTags.querySelector(`[data-tag="${tag}"]`)?.classList.remove('active');
+          }
+        }
+        updateLiveGeneratedPreview();
+      });
+    });
+  }
+
+  function getLiveGeneratedModalFilters() {
+    return {
+      searchTerm: liveGeneratedSearch.value,
+      includeTags: [...liveGeneratedSelectedIncludeTags],
+      excludeTags: [...liveGeneratedSelectedExcludeTags],
+      includeTagsMode: liveGeneratedIncludeTagsMode,
+      ratingPerson: liveGeneratedRatingPerson.value,
+      minRating: liveGeneratedRatingFilter.value,
+      sortBy: liveGeneratedSortBy.value
+    };
+  }
+
+  function updateLiveGeneratedPreview() {
+    const filters = getLiveGeneratedModalFilters();
+    const matchingVideos = applyFiltersToVideos(allVideos, filters);
+    liveGeneratedPreviewCount.textContent = `${matchingVideos.length} video${matchingVideos.length !== 1 ? 's' : ''} currently match these filters`;
+  }
+
+  function openLiveGeneratedModal(index = null) {
+    currentEditLiveGeneratedIndex = index;
+
+    if (index !== null) {
+      // Editing existing playlist
+      const playlist = allLiveGeneratedPlaylists[index];
+      liveGeneratedModalTitle.textContent = 'Edit Live Generated Playlist';
+      liveGeneratedNameInput.value = playlist.name;
+
+      // Load filter values from playlist
+      liveGeneratedSearch.value = playlist.filters.searchTerm || '';
+      liveGeneratedSelectedIncludeTags = new Set(playlist.filters.includeTags || []);
+      liveGeneratedSelectedExcludeTags = new Set(playlist.filters.excludeTags || []);
+      liveGeneratedIncludeTagsMode = playlist.filters.includeTagsMode || 'AND';
+      liveGeneratedRatingPerson.value = playlist.filters.ratingPerson || 'avg';
+      liveGeneratedRatingFilter.value = playlist.filters.minRating || '';
+      liveGeneratedSortBy.value = playlist.filters.sortBy || 'recent';
+
+      deleteLiveGeneratedBtn.classList.remove('hidden');
+    } else {
+      // Creating new playlist from current filters
+      liveGeneratedModalTitle.textContent = 'Create Live Generated Playlist';
+      liveGeneratedNameInput.value = '';
+
+      // Load current UI filter state
+      const currentFilters = getCurrentFiltersState();
+      liveGeneratedSearch.value = currentFilters.searchTerm || '';
+      liveGeneratedSelectedIncludeTags = new Set(currentFilters.includeTags || []);
+      liveGeneratedSelectedExcludeTags = new Set(currentFilters.excludeTags || []);
+      liveGeneratedIncludeTagsMode = currentFilters.includeTagsMode || 'AND';
+      liveGeneratedRatingPerson.value = currentFilters.ratingPerson || 'avg';
+      liveGeneratedRatingFilter.value = currentFilters.minRating || '';
+      liveGeneratedSortBy.value = currentFilters.sortBy || 'recent';
+
+      deleteLiveGeneratedBtn.classList.add('hidden');
+    }
+
+    // Update mode toggle display
+    liveGeneratedModeToggle.textContent = liveGeneratedIncludeTagsMode;
+    liveGeneratedModeToggle.classList.toggle('or-mode', liveGeneratedIncludeTagsMode === 'OR');
+
+    updateLiveGeneratedTagFilters();
+    updateLiveGeneratedPreview();
+    liveGeneratedModal.classList.remove('hidden');
+  }
+
+  function closeLiveGeneratedModal() {
+    liveGeneratedModal.classList.add('hidden');
+    currentEditLiveGeneratedIndex = null;
+  }
+
+  async function saveLiveGeneratedPlaylist() {
+    const name = liveGeneratedNameInput.value.trim();
+    if (!name) {
+      alert('Please enter a playlist name.');
+      return;
+    }
+
+    const filters = getLiveGeneratedModalFilters();
+
+    if (currentEditLiveGeneratedIndex !== null) {
+      // Update existing playlist
+      allLiveGeneratedPlaylists[currentEditLiveGeneratedIndex].name = name;
+      allLiveGeneratedPlaylists[currentEditLiveGeneratedIndex].filters = filters;
+      await saveLiveGeneratedPlaylists();
+      renderLiveGeneratedPlaylists();
+    } else {
+      // Create new playlist
+      await createLiveGeneratedPlaylist(name, filters);
+    }
+
+    closeLiveGeneratedModal();
+  }
+
+  async function deleteLiveGeneratedPlaylist() {
+    if (currentEditLiveGeneratedIndex === null) return;
+
+    const playlist = allLiveGeneratedPlaylists[currentEditLiveGeneratedIndex];
+    if (!confirm(`Are you sure you want to delete "${playlist.name}"?`)) {
+      return;
+    }
+
+    allLiveGeneratedPlaylists.splice(currentEditLiveGeneratedIndex, 1);
+    await saveLiveGeneratedPlaylists();
+    renderLiveGeneratedPlaylists();
+    closeLiveGeneratedModal();
+  }
+
   // ==================== BOOKMARKS FUNCTIONS ====================
 
   async function loadTaggedUrls() {
@@ -1302,6 +1695,17 @@ document.addEventListener('DOMContentLoaded', async () => {
           const tagsB = taggedB ? taggedB.tags.length : 0;
           // More tags first, then alphabetical
           if (tagsB !== tagsA) return tagsB - tagsA;
+          return (a.title || '').localeCompare(b.title || '');
+        });
+        break;
+      case 'least-tags':
+        filtered.sort((a, b) => {
+          const taggedA = isUrlTagged(a.url);
+          const taggedB = isUrlTagged(b.url);
+          const tagsA = taggedA ? taggedA.tags.length : 0;
+          const tagsB = taggedB ? taggedB.tags.length : 0;
+          // Fewer tags first, then alphabetical
+          if (tagsA !== tagsB) return tagsA - tagsB;
           return (a.title || '').localeCompare(b.title || '');
         });
         break;
@@ -2221,6 +2625,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     const items = filtered.map(v => ({ url: v.url, title: v.title }));
     openAddToPlaylistModal(items);
+  });
+
+  // Add filters to Live Generated Playlist button
+  addFiltersToLivePlaylistBtn.addEventListener('click', () => {
+    openLiveGeneratedModal(null);
+  });
+
+  // Live Generated Playlist modal event listeners
+  closeLiveGeneratedModalBtn.addEventListener('click', closeLiveGeneratedModal);
+  liveGeneratedModal.addEventListener('click', (e) => {
+    if (e.target === liveGeneratedModal) closeLiveGeneratedModal();
+  });
+
+  saveLiveGeneratedBtn.addEventListener('click', saveLiveGeneratedPlaylist);
+  deleteLiveGeneratedBtn.addEventListener('click', deleteLiveGeneratedPlaylist);
+
+  // Live Generated Playlist modal filter change listeners
+  liveGeneratedSearch.addEventListener('input', updateLiveGeneratedPreview);
+  liveGeneratedRatingPerson.addEventListener('change', updateLiveGeneratedPreview);
+  liveGeneratedRatingFilter.addEventListener('change', updateLiveGeneratedPreview);
+  liveGeneratedSortBy.addEventListener('change', updateLiveGeneratedPreview);
+
+  liveGeneratedModeToggle.addEventListener('click', () => {
+    liveGeneratedIncludeTagsMode = liveGeneratedIncludeTagsMode === 'AND' ? 'OR' : 'AND';
+    liveGeneratedModeToggle.textContent = liveGeneratedIncludeTagsMode;
+    liveGeneratedModeToggle.classList.toggle('or-mode', liveGeneratedIncludeTagsMode === 'OR');
+    updateLiveGeneratedPreview();
   });
 
   // Playlist event listeners
