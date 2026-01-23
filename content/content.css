@@ -21,6 +21,40 @@
   opacity: 1;
 }
 
+/* Interim (partial) transcription styling */
+.custom-cuts-subtitle-overlay.interim {
+  opacity: 0.85;
+  border-left: 3px solid rgba(255, 255, 255, 0.5);
+  padding-left: 17px;
+}
+
+.custom-cuts-subtitle-overlay.interim::after {
+  content: '|';
+  animation: blink 0.7s infinite;
+  margin-left: 2px;
+  font-weight: normal;
+}
+
+/* Final transcription styling */
+.custom-cuts-subtitle-overlay.final {
+  opacity: 1;
+  border-left: none;
+  padding-left: 20px;
+}
+
+.custom-cuts-subtitle-overlay.final::after {
+  content: none;
+}
+
+@keyframes blink {
+  0%, 50% {
+    opacity: 1;
+  }
+  51%, 100% {
+    opacity: 0;
+  }
+}
+
 /* Subtitle position variants */
 .custom-cuts-subtitle-overlay.position-bottom-left {
   left: 20px;

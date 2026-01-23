@@ -7,6 +7,10 @@ const DEFAULT_SETTINGS = {
   whisperModel: 'large-v3',
   parakeetModel: 'nvidia/parakeet-tdt-0.6b-v3',
   whisperLanguage: 'en',
+  // Streaming transcription settings
+  streamingMode: true,  // Enable low-latency streaming mode
+  streamingLatency: 'medium',  // 'low' (~80ms), 'medium' (~560ms), 'high' (~1.12s)
+  showInterimResults: true,  // Show interim (partial) transcription results
   // Display settings for subtitles and pop tags
   subtitleStyle: {
     fontSize: 18,
@@ -124,6 +128,11 @@ class TranscriptionSession {
     this.isPaused = false;
     this.currentVideoTime = 0;
     this.keepAliveInterval = null;
+    // Streaming mode properties
+    this.streamingMode = false;
+    this.latencyMode = 'medium';
+    this.showInterimResults = true;
+    this.streamingSequenceId = 0;
   }
 
   // Keep service worker alive while waiting for native host
@@ -179,17 +188,32 @@ class TranscriptionSession {
       const engine = settings.speechEngine || 'faster-whisper';
       const model = engine === 'parakeet' ? settings.parakeetModel : settings.whisperModel;
 
+      // Load streaming settings
+      this.streamingMode = settings.streamingMode !== false;  // Default true
+      this.latencyMode = settings.streamingLatency || 'medium';
+      this.showInterimResults = settings.showInterimResults !== false;  // Default true
+
       this.nativePort.postMessage({
         type: 'init',
         engine: engine,
         model: model,
         device: 'cuda',
-        language: settings.whisperLanguage
+        language: settings.whisperLanguage,
+        streamingMode: this.streamingMode,
+        latencyMode: this.latencyMode
       });
-      console.log(`[Transcription] Initializing ${engine} with model ${model}`);
+      console.log(`[Transcription] Initializing ${engine} with model ${model}, streaming=${this.streamingMode}, latency=${this.latencyMode}`);
 
       // Start audio capture via offscreen document
       await this.startAudioCapture();
+
+      // Enable streaming mode in offscreen document if configured
+      if (this.streamingMode) {
+        await chrome.runtime.sendMessage({
+          action: 'setStreamingMode',
+          enabled: true
+        });
+      }
 
       return { success: true };
 
@@ -252,6 +276,26 @@ class TranscriptionSession {
     this.currentVideoTime += duration;
   }
 
+  handleStreamingAudioChunk(audio, duration, sequenceId) {
+    if (!this.nativePort || !this.isInitialized) {
+      return;  // Not ready yet
+    }
+
+    const chunkId = `stream_${this.tabId}_${this.streamingSequenceId++}`;
+
+    this.nativePort.postMessage({
+      type: 'stream_chunk',
+      audio: audio,
+      timestamp: this.currentVideoTime,
+      chunkId: chunkId,
+      sequenceId: sequenceId,
+      language: 'en'
+    });
+
+    // Update video time estimate
+    this.currentVideoTime += duration;
+  }
+
   handleNativeMessage(message) {
     // Only log non-routine messages
     if (message.type !== 'pong' && message.type !== 'heartbeat') {
@@ -259,13 +303,14 @@ class TranscriptionSession {
     }
     switch (message.type) {
       case 'ready':
-        console.log('Whisper initialized:', message.model, message.device);
+        console.log('Whisper initialized:', message.model, message.device, 'streaming:', message.streamingMode);
         this.isInitialized = true;
         sendToTab(this.tabId, {
           action: 'transcriptionStatus',
           status: 'ready',
           model: message.model,
-          device: message.device
+          device: message.device,
+          streamingMode: message.streamingMode
         });
         // Send ping to keep connection active
         if (this.nativePort) {
@@ -274,7 +319,7 @@ class TranscriptionSession {
         break;
 
       case 'transcription':
-        // Forward transcription to content script
+        // Forward transcription to content script (batch mode)
         if (message.segments && message.segments.length > 0) {
           console.log(`[Transcription] Result: "${message.text?.substring(0, 50)}..." segments:`, message.segments.map(s => `[${s.start?.toFixed(1)}-${s.end?.toFixed(1)}]`).join(', '));
           sendToTab(this.tabId, {
@@ -286,7 +331,36 @@ class TranscriptionSession {
         }
         break;
 
+      case 'interim_transcription':
+        // Forward interim (partial) transcription to content script
+        if (this.showInterimResults && message.text) {
+          console.log(`[Streaming] Interim: "${message.text?.substring(0, 50)}..."`);
+          sendToTab(this.tabId, {
+            action: 'interimTranscriptionResult',
+            text: message.text,
+            timestamp: message.timestamp,
+            sequenceId: message.sequenceId,
+            chunkId: message.chunkId
+          });
+        }
+        break;
+
+      case 'final_transcription':
+        // Forward finalized streaming transcription to content script
+        if (message.text) {
+          console.log(`[Streaming] Final: "${message.text?.substring(0, 50)}..." segments:`, message.segments?.length);
+          sendToTab(this.tabId, {
+            action: 'transcriptionResult',
+            segments: message.segments || [{ start: message.timestamp, end: message.timestamp + 1, text: message.text }],
+            text: message.text,
+            chunkId: message.chunkId,
+            isStreaming: true
+          });
+        }
+        break;
+
       case 'reset_complete':
+      case 'streaming_reset_complete':
         break;
 
       case 'error':
@@ -307,6 +381,7 @@ class TranscriptionSession {
         break;
 
       case 'transcribe_ack':
+      case 'stream_chunk_ack':
         // Send immediate ping to keep connection active
         if (this.nativePort) {
           this.nativePort.postMessage({ type: 'ping' });
@@ -347,6 +422,12 @@ class TranscriptionSession {
     chrome.runtime.sendMessage({ action: 'resetCapture' });
     if (this.nativePort && this.isInitialized) {
       this.nativePort.postMessage({ type: 'reset' });
+      // Also reset streaming state if in streaming mode
+      if (this.streamingMode) {
+        this.nativePort.postMessage({ type: 'reset_streaming' });
+        chrome.runtime.sendMessage({ action: 'resetStreamingSequence' });
+        this.streamingSequenceId = 0;
+      }
     }
   }
 
@@ -358,9 +439,18 @@ class TranscriptionSession {
     // Stop audio capture in offscreen document
     chrome.runtime.sendMessage({ action: 'stopCapture' }).catch(() => {});
 
+    // Disable streaming mode in offscreen document
+    if (this.streamingMode) {
+      chrome.runtime.sendMessage({ action: 'setStreamingMode', enabled: false }).catch(() => {});
+    }
+
     // Disconnect native port
     if (this.nativePort) {
       try {
+        // Finalize streaming before shutdown
+        if (this.streamingMode) {
+          this.nativePort.postMessage({ type: 'finalize_streaming', timestamp: this.currentVideoTime });
+        }
         this.nativePort.postMessage({ type: 'shutdown' });
       } catch (e) {
         // Port may already be disconnected
@@ -630,11 +720,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       return true;
 
-    // Audio chunk from offscreen document (live transcription)
+    // Audio chunk from offscreen document (batch transcription)
     case 'audioChunk':
       // Find the active transcription session and send the chunk
       for (const [tid, session] of transcriptionState.entries()) {
         session.handleAudioChunk(message.audio, message.duration);
+      }
+      break;
+
+    // Streaming audio chunk from offscreen document (low-latency transcription)
+    case 'streamingAudioChunk':
+      // Find the active transcription session and send the streaming chunk
+      for (const [tid, session] of transcriptionState.entries()) {
+        session.handleStreamingAudioChunk(message.audio, message.duration, message.sequenceId);
       }
       break;
 

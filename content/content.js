@@ -137,6 +137,7 @@
       this.currentText = '';
       this.hideTimeout = null;
       this.displayDuration = 5000; // How long to show each subtitle (ms)
+      this.isInterim = false;  // Track if currently showing interim result
     }
 
     addSegments(segments) {
@@ -148,7 +149,7 @@
       if (!text) return;
 
       console.log(`[Subtitles] Showing live: "${text.substring(0, 50)}..."`);
-      this.showText(text);
+      this.showFinal(text);
     }
 
     showText(text) {
@@ -170,6 +171,54 @@
       }, this.displayDuration);
     }
 
+    showInterim(text) {
+      // Show interim (partial) transcription with special styling
+      if (!this.overlay || !text) return;
+
+      // Clear any pending hide timeout (interim results shouldn't auto-hide quickly)
+      if (this.hideTimeout) {
+        clearTimeout(this.hideTimeout);
+        this.hideTimeout = null;
+      }
+
+      // Update text and add interim styling
+      this.currentText = text;
+      this.overlay.textContent = text;
+      this.overlay.classList.add('visible', 'interim');
+      this.overlay.classList.remove('final');
+      this.isInterim = true;
+
+      // Set a longer timeout for interim - it will be replaced by final or next interim
+      this.hideTimeout = setTimeout(() => {
+        // Only hide if still showing interim (not replaced by final)
+        if (this.isInterim) {
+          this.overlay.classList.remove('visible');
+        }
+      }, 10000);  // 10 second timeout for stale interim results
+    }
+
+    showFinal(text) {
+      // Show finalized transcription with normal styling
+      if (!this.overlay || !text) return;
+
+      // Clear any pending hide
+      if (this.hideTimeout) {
+        clearTimeout(this.hideTimeout);
+      }
+
+      // Update text and remove interim styling
+      this.currentText = text;
+      this.overlay.textContent = text;
+      this.overlay.classList.add('visible', 'final');
+      this.overlay.classList.remove('interim');
+      this.isInterim = false;
+
+      // Auto-hide after display duration
+      this.hideTimeout = setTimeout(() => {
+        this.overlay.classList.remove('visible', 'final');
+      }, this.displayDuration);
+    }
+
     update(currentTime) {
       // Not needed for live mode - subtitles display immediately when received
     }
@@ -180,9 +229,10 @@
         this.hideTimeout = null;
       }
       this.currentText = '';
+      this.isInterim = false;
       if (this.overlay) {
         this.overlay.textContent = '';
-        this.overlay.classList.remove('visible');
+        this.overlay.classList.remove('visible', 'interim', 'final');
       }
     }
 
@@ -1374,6 +1424,14 @@
           subtitleManager.addSegments(message.segments);
         } else {
           console.log('[Subtitles] Missing subtitleManager or segments:', !!subtitleManager, !!message.segments);
+        }
+        break;
+
+      case 'interimTranscriptionResult':
+        // Handle interim (partial) transcription from streaming mode
+        console.log('[Subtitles] interimTranscriptionResult received:', message.text?.substring(0, 50));
+        if (subtitleManager && message.text) {
+          subtitleManager.showInterim(message.text);
         }
         break;
 

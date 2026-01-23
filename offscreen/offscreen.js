@@ -20,9 +20,18 @@ let genIsCapturing = false;
 let genAudioPlayback = null;
 let genTimestamp = 0;
 
+// Batch transcription constants (legacy mode)
 const CHUNK_DURATION = 10; // seconds - larger chunks for better context
 const OVERLAP_DURATION = 2; // seconds - overlap between chunks to avoid cutting mid-sentence
 const SAMPLE_RATE = 16000; // Whisper expects 16kHz
+
+// Streaming transcription constants (low-latency mode)
+const STREAMING_CHUNK_DURATION = 0.5; // 500ms chunks for streaming
+const STREAMING_OVERLAP_DURATION = 0;  // No overlap - cache handles context
+
+// Streaming mode state
+let streamingMode = false;
+let streamingSequenceId = 0;
 
 // Rolling audio buffer for pattern learning (keeps last 60 seconds)
 const PATTERN_BUFFER_DURATION = 60;
@@ -95,6 +104,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       patternBufferVideoTime = 0;
       sendResponse({ success: true });
       break;
+
+    // Streaming mode handlers
+    case 'setStreamingMode':
+      streamingMode = message.enabled;
+      streamingSequenceId = 0;
+      console.log('Streaming mode:', streamingMode ? 'enabled' : 'disabled');
+      sendResponse({ success: true });
+      break;
+
+    case 'resetStreamingSequence':
+      streamingSequenceId = 0;
+      sendResponse({ success: true });
+      break;
   }
 });
 
@@ -144,8 +166,14 @@ async function startCapture(streamId) {
       updatePatternBuffer(resampled);
 
       // Send chunk when we have enough audio
-      if (bufferDuration >= CHUNK_DURATION) {
-        sendAudioChunk();
+      // Use different thresholds for streaming vs batch mode
+      const chunkThreshold = streamingMode ? STREAMING_CHUNK_DURATION : CHUNK_DURATION;
+      if (bufferDuration >= chunkThreshold) {
+        if (streamingMode) {
+          sendStreamingAudioChunk();
+        } else {
+          sendAudioChunk();
+        }
       }
     };
 
@@ -206,6 +234,36 @@ function sendAudioChunk() {
     audio: base64,
     duration: CHUNK_DURATION,
     overlap: OVERLAP_DURATION
+  });
+}
+
+function sendStreamingAudioChunk() {
+  // Streaming mode: smaller chunks, no overlap (cache handles context)
+  const chunkSamples = SAMPLE_RATE * STREAMING_CHUNK_DURATION;
+
+  // Get the streaming chunk
+  const samplesToSend = audioBuffer.slice(0, chunkSamples);
+
+  // Remove all sent samples (no overlap in streaming mode)
+  audioBuffer.splice(0, chunkSamples);
+  bufferDuration = audioBuffer.length / SAMPLE_RATE;
+
+  // Convert to PCM16
+  const pcm16 = new Int16Array(samplesToSend.length);
+  for (let i = 0; i < samplesToSend.length; i++) {
+    pcm16[i] = Math.max(-32768, Math.min(32767, Math.floor(samplesToSend[i] * 32767)));
+  }
+
+  // Encode as base64
+  const bytes = new Uint8Array(pcm16.buffer);
+  const base64 = arrayBufferToBase64(bytes);
+
+  // Send to service worker as streaming chunk
+  chrome.runtime.sendMessage({
+    action: 'streamingAudioChunk',
+    audio: base64,
+    duration: STREAMING_CHUNK_DURATION,
+    sequenceId: streamingSequenceId++
   });
 }
 

@@ -78,7 +78,10 @@ except Exception as e:
 # Supports Whisper, Faster-Whisper, and Parakeet engines
 speech_engine = None
 streaming_engine = None
+true_streaming_engine = None  # For cache-aware streaming (Parakeet only)
 _engine_type = 'faster-whisper'  # 'whisper', 'faster-whisper', or 'parakeet'
+_streaming_mode = False  # True for low-latency streaming mode
+_latency_mode = 'medium'  # 'low', 'medium', 'high' for streaming latency
 
 # Pattern detection engine (lazy load)
 pattern_engine = None
@@ -167,7 +170,7 @@ _init_error = None
 
 def _background_load_engine():
     """Load speech engine in background thread."""
-    global speech_engine, streaming_engine, _init_error, _engine_type
+    global speech_engine, streaming_engine, true_streaming_engine, _init_error, _engine_type, _streaming_mode, _latency_mode
     import io
     import time
 
@@ -179,7 +182,7 @@ def _background_load_engine():
     captured_output = io.StringIO()
 
     try:
-        log(f"Loading {_engine_type} model: {_init_model} on {_init_device}")
+        log(f"Loading {_engine_type} model: {_init_model} on {_init_device} (streaming={_streaming_mode}, latency={_latency_mode})")
 
         # Redirect stdout for the import and init
         sys.stdout = captured_output
@@ -188,18 +191,45 @@ def _background_load_engine():
             from parakeet_engine import ParakeetEngine, StreamingParakeet
             speech_engine = ParakeetEngine(model_name=_init_model, device=_init_device)
             streaming_engine = StreamingParakeet(speech_engine)
+
+            # Try to load true streaming engine for low-latency mode
+            if _streaming_mode:
+                try:
+                    from streaming_parakeet_engine import StreamingParakeetEngine
+                    true_streaming_engine = StreamingParakeetEngine(
+                        model_name=_init_model,
+                        device=_init_device,
+                        latency_mode=_latency_mode
+                    )
+                    log(f"True streaming engine loaded (latency={_latency_mode})")
+                except Exception as e:
+                    # Fall back to batch-based streaming
+                    log(f"True streaming not available, using fallback: {e}", 1)
+                    from streaming_parakeet_engine import FallbackStreamingEngine
+                    true_streaming_engine = FallbackStreamingEngine(speech_engine)
+
         elif _engine_type == 'faster-whisper':
             from faster_whisper_engine import FasterWhisperEngine, StreamingFasterWhisper
             speech_engine = FasterWhisperEngine(model_name=_init_model, device=_init_device)
             streaming_engine = StreamingFasterWhisper(speech_engine)
+
+            # For Faster-Whisper, use fallback streaming engine
+            if _streaming_mode:
+                from streaming_parakeet_engine import FallbackStreamingEngine
+                true_streaming_engine = FallbackStreamingEngine(speech_engine)
         else:
             from whisper_engine import WhisperEngine, StreamingWhisper
             speech_engine = WhisperEngine(model_name=_init_model, device=_init_device)
             streaming_engine = StreamingWhisper(speech_engine)
 
+            # For Whisper, use fallback streaming engine
+            if _streaming_mode:
+                from streaming_parakeet_engine import FallbackStreamingEngine
+                true_streaming_engine = FallbackStreamingEngine(speech_engine)
+
         # Restore stdout before logging success
         sys.stdout = old_stdout
-        log(f"{_engine_type} loaded successfully")
+        log(f"{_engine_type} loaded successfully (streaming_engine={'available' if true_streaming_engine else 'not loaded'})")
 
         # Log any captured output at debug level
         captured = captured_output.getvalue()
@@ -213,7 +243,7 @@ def _background_load_engine():
 
 def handle_init(message: dict) -> dict:
     """Handle initialization request - start loading speech engine in background."""
-    global _init_model, _init_device, _init_thread, _engine_type
+    global _init_model, _init_device, _init_thread, _engine_type, _streaming_mode, _latency_mode
 
     _engine_type = message.get('engine', 'faster-whisper')  # 'whisper', 'faster-whisper', or 'parakeet'
 
@@ -226,11 +256,15 @@ def handle_init(message: dict) -> dict:
 
     _init_device = message.get('device', 'cuda')
 
+    # Streaming mode parameters
+    _streaming_mode = message.get('streamingMode', False)
+    _latency_mode = message.get('latencyMode', 'medium')  # 'low', 'medium', 'high'
+
     # Start loading in background thread
     _init_thread = threading.Thread(target=_background_load_engine, daemon=True)
     _init_thread.start()
 
-    log(f"Init: engine={_engine_type}, model={_init_model}, device={_init_device}", 3)
+    log(f"Init: engine={_engine_type}, model={_init_model}, device={_init_device}, streaming={_streaming_mode}, latency={_latency_mode}", 3)
 
     # Return ready immediately - transcription will wait for model
     return {
@@ -238,6 +272,8 @@ def handle_init(message: dict) -> dict:
         'engine': _engine_type,
         'model': _init_model,
         'device': _init_device,
+        'streamingMode': _streaming_mode,
+        'latencyMode': _latency_mode,
         'status': 'loading'  # Indicate still loading
     }
 
@@ -327,13 +363,162 @@ def handle_transcribe(message: dict) -> dict:
 
 def handle_reset(message: dict) -> dict:
     """Handle reset request (e.g., on video seek)."""
-    global streaming_engine
+    global streaming_engine, true_streaming_engine
 
     if streaming_engine:
         streaming_engine.reset()
 
+    if true_streaming_engine:
+        true_streaming_engine.reset_cache()
+
     return {
         'type': 'reset_complete'
+    }
+
+
+# ============================================================================
+# Streaming Transcription Handlers (Low-latency mode)
+# ============================================================================
+
+_streaming_queue = queue.Queue()
+_streaming_thread = None
+_streaming_sequence = 0
+
+
+def _streaming_worker():
+    """Background worker for streaming transcription with low latency."""
+    global true_streaming_engine, _init_thread, _init_error, _streaming_sequence
+
+    while True:
+        try:
+            task = _streaming_queue.get(timeout=1)
+            if task is None:  # Shutdown signal
+                break
+
+            message, chunk_id = task
+
+            # Wait for engine if still loading
+            if _init_thread is not None and _init_thread.is_alive():
+                log("Waiting for streaming engine to load...", 3)
+                _init_thread.join(timeout=60)
+
+            if _init_error is not None:
+                send_native_message({
+                    'type': 'error',
+                    'message': f'Streaming engine initialization failed: {_init_error}',
+                    'chunkId': chunk_id
+                })
+                continue
+
+            if true_streaming_engine is None:
+                # Fall back to regular transcription if streaming engine not available
+                send_native_message({
+                    'type': 'error',
+                    'message': 'Streaming engine not initialized, use regular transcribe',
+                    'chunkId': chunk_id
+                })
+                continue
+
+            # Process streaming chunk
+            audio_base64 = message.get('audio', '')
+            timestamp = message.get('timestamp', 0)
+            sequence_id = message.get('sequenceId', _streaming_sequence)
+            _streaming_sequence += 1
+
+            log(f"Processing streaming chunk {chunk_id} at {timestamp:.1f}s", 3)
+
+            result = true_streaming_engine.process_streaming_chunk(
+                audio_base64,
+                timestamp,
+                sequence_id
+            )
+
+            # Send interim result if we have one
+            if result.get('interim_text'):
+                log(f"Interim: {result['interim_text'][:50]}", 3)
+                send_native_message({
+                    'type': 'interim_transcription',
+                    'chunkId': chunk_id,
+                    'text': result['interim_text'],
+                    'timestamp': timestamp,
+                    'sequenceId': sequence_id
+                })
+
+            # Send final result if we have one
+            if result.get('is_final') and result.get('final_text'):
+                log(f"Final: {result['final_text'][:50]}")
+                send_native_message({
+                    'type': 'final_transcription',
+                    'chunkId': chunk_id,
+                    'text': result['final_text'],
+                    'segments': result.get('final_segments', []),
+                    'timestamp': timestamp,
+                    'sequenceId': sequence_id
+                })
+
+        except queue.Empty:
+            continue
+        except Exception as e:
+            log(f"Streaming worker error: {e}", 0)
+            log(traceback.format_exc(), 0)
+
+
+def handle_stream_chunk(message: dict) -> dict:
+    """Handle streaming audio chunk - queue for low-latency processing."""
+    global _streaming_thread
+
+    # Start worker thread if not running
+    if _streaming_thread is None or not _streaming_thread.is_alive():
+        _streaming_thread = threading.Thread(target=_streaming_worker, daemon=True)
+        _streaming_thread.start()
+        log("Streaming worker started", 3)
+
+    chunk_id = message.get('chunkId', '')
+    _streaming_queue.put((message, chunk_id))
+    log(f"Streaming queued: {chunk_id}", 3)
+
+    # Send acknowledgment
+    return {
+        'type': 'stream_chunk_ack',
+        'chunkId': chunk_id,
+        'status': 'queued'
+    }
+
+
+def handle_reset_streaming(message: dict) -> dict:
+    """Handle streaming reset request (e.g., on video seek)."""
+    global true_streaming_engine, _streaming_sequence
+
+    _streaming_sequence = 0
+
+    if true_streaming_engine:
+        true_streaming_engine.reset_cache()
+        log("Streaming cache reset", 3)
+
+    return {
+        'type': 'streaming_reset_complete'
+    }
+
+
+def handle_finalize_streaming(message: dict) -> dict:
+    """Finalize streaming session and get any remaining output."""
+    global true_streaming_engine
+
+    if true_streaming_engine:
+        timestamp = message.get('timestamp', 0)
+        result = true_streaming_engine.finalize_stream(timestamp)
+
+        if result.get('final_text'):
+            return {
+                'type': 'final_transcription',
+                'text': result['final_text'],
+                'segments': result.get('final_segments', []),
+                'timestamp': timestamp,
+                'finalized': True
+            }
+
+    return {
+        'type': 'streaming_finalized'
     }
 
 
@@ -548,6 +733,10 @@ def handle_message(message: dict) -> Optional[dict]:
         'reset': handle_reset,
         'ping': handle_ping,
         'shutdown': lambda m: {'_shutdown': True},  # Special marker for shutdown
+        # Streaming transcription handlers
+        'stream_chunk': handle_stream_chunk,
+        'reset_streaming': handle_reset_streaming,
+        'finalize_streaming': handle_finalize_streaming,
         # Pattern detection handlers
         'init_patterns': handle_init_patterns,
         'learn_pattern': handle_learn_pattern,

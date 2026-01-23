@@ -311,6 +311,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         const response = await chrome.tabs.sendMessage(currentTab.id, { action: 'getCurrentTime' });
         const currentTime = response ? response.currentTime : 0;
 
+        // Check for duplicate (same tag name within 2 seconds)
+        const isDuplicate = tags.some(existing => {
+          if (existing.name.toLowerCase() !== tagName.toLowerCase()) return false;
+          const existingTime = existing.timestamp ?? existing.startTime ?? 0;
+          return Math.abs(existingTime - currentTime) < 2;
+        });
+
+        if (isDuplicate) {
+          return; // No-op for duplicate quick tags
+        }
+
         tags.push({
           name: tagName,
           timestamp: currentTime,
@@ -382,6 +393,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         const response = await chrome.tabs.sendMessage(currentTab.id, { action: 'getCurrentTime' });
         const currentTime = response ? response.currentTime : 0;
+
+        // Check for duplicate (same tag name within 2 seconds)
+        const isDuplicate = tags.some(existing => {
+          if (existing.name.toLowerCase() !== tagName.toLowerCase()) return false;
+          const existingTime = existing.timestamp ?? existing.startTime ?? 0;
+          return Math.abs(existingTime - currentTime) < 2;
+        });
+
+        if (isDuplicate) {
+          return; // No-op for duplicate recent tags
+        }
 
         tags.push({
           name: tagName,
