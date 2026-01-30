@@ -88,6 +88,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         skipPlayMode: getControlGroup('playback-mode'),
         autoClose: getControlGroup('auto-close-toggle'),
         videoRating: getControlGroup('rating-stars'),
+        feedback: document.querySelector('.feedback-container'),
         subtitles: getControlGroup('subtitles-toggle'),
         patternMatching: getControlGroup('pattern-list')
       };

@@ -29,6 +29,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const panelSkipPlayMode = document.getElementById('panel-skip-play-mode');
   const panelAutoClose = document.getElementById('panel-auto-close');
   const panelVideoRating = document.getElementById('panel-video-rating');
+  const panelFeedback = document.getElementById('panel-feedback');
   const panelSubtitles = document.getElementById('panel-subtitles');
   const panelPatternMatching = document.getElementById('panel-pattern-matching');
 
@@ -203,6 +204,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     panelSkipPlayMode.checked = panels.skipPlayMode !== false;
     panelAutoClose.checked = panels.autoClose !== false;
     panelVideoRating.checked = panels.videoRating !== false;
+    panelFeedback.checked = panels.feedback !== false;
     panelSubtitles.checked = panels.subtitles !== false;
     panelPatternMatching.checked = panels.patternMatching !== false;
 
@@ -458,6 +460,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         skipPlayMode: panelSkipPlayMode.checked,
         autoClose: panelAutoClose.checked,
         videoRating: panelVideoRating.checked,
+        feedback: panelFeedback.checked,
         subtitles: panelSubtitles.checked,
         patternMatching: panelPatternMatching.checked
       }
