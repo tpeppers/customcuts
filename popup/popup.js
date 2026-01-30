@@ -68,10 +68,70 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   let currentTab = null;
   let videoInfo = null;
+  let popupSettings = null;
+
+  // Helper to get parent control-group from a child element
+  function getControlGroup(elementId) {
+    const el = document.getElementById(elementId);
+    return el ? el.closest('.control-group') : null;
+  }
+
+  // Panel elements for visibility control (lazily initialized)
+  let panelElements = null;
+  function getPanelElements() {
+    if (!panelElements) {
+      panelElements = {
+        quickTags: getControlGroup('quick-tags-container'),
+        lastTags: getControlGroup('last-tags-container'),
+        tagTimeRange: getControlGroup('start-time-input'),
+        videoTags: getControlGroup('video-tags-list'),
+        skipPlayMode: getControlGroup('playback-mode'),
+        autoClose: getControlGroup('auto-close-toggle'),
+        videoRating: getControlGroup('rating-stars'),
+        subtitles: getControlGroup('subtitles-toggle'),
+        patternMatching: getControlGroup('pattern-list')
+      };
+    }
+    return panelElements;
+  }
+
+  async function loadPopupSettings() {
+    try {
+      const settings = await chrome.runtime.sendMessage({ action: 'getSettings' });
+      popupSettings = settings.popupSettings || {
+        lastTagsCount: 10,
+        quickTagsCount: 20,
+        panels: {}
+      };
+    } catch (e) {
+      popupSettings = {
+        lastTagsCount: 10,
+        quickTagsCount: 20,
+        panels: {}
+      };
+    }
+  }
+
+  function applyPanelVisibility() {
+    if (!popupSettings || !popupSettings.panels) return;
+
+    const panels = popupSettings.panels;
+    const elements = getPanelElements();
+    for (const [key, element] of Object.entries(elements)) {
+      if (element) {
+        // Default to visible if not explicitly set
+        const isVisible = panels[key] !== false;
+        element.style.display = isVisible ? '' : 'none';
+      }
+    }
+  }
 
   async function init() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     currentTab = tab;
+
+    // Load popup settings first
+    await loadPopupSettings();
 
     // Always check and show queue first
     await loadQueue();
@@ -179,6 +239,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     videoStatus.classList.add('active');
     noVideoSection.classList.add('hidden');
     videoControls.classList.remove('hidden');
+    applyPanelVisibility();
     loadVideoData();
   }
 
@@ -266,7 +327,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     return /^[A-Za-z0-9\s]+$/.test(name) && name.length <= 128;
   }
 
-  async function getTopTags(limit = 20) {
+  async function getTopTags(limit = null) {
+    // Use settings limit if not specified
+    if (limit === null) {
+      limit = popupSettings?.quickTagsCount || 20;
+    }
+
     const data = await chrome.storage.local.get(null);
     const tagCounts = new Map();
 
@@ -335,7 +401,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  async function getLastTags(limit = 10) {
+  async function getLastTags(limit = null) {
+    // Use settings limit if not specified
+    if (limit === null) {
+      limit = popupSettings?.lastTagsCount || 10;
+    }
+
     const data = await chrome.storage.local.get(null);
     const allTags = [];
 
@@ -371,6 +442,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   async function renderLastTags() {
     const lastTags = await getLastTags();
+    const lastTagsHeader = document.getElementById('last-tags-header');
+    const limit = popupSettings?.lastTagsCount || 10;
+    if (lastTagsHeader) {
+      lastTagsHeader.textContent = `Last ${limit} Tags`;
+    }
 
     if (lastTags.length === 0) {
       lastTagsContainer.innerHTML = '<span class="empty-text">No recent tags</span>';

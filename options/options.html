@@ -15,201 +15,287 @@
       </div>
     </header>
 
-    <section class="settings-section">
-      <h2>Playback Controls</h2>
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="general">General</button>
+      <button class="tab-btn" data-tab="tags">Tags</button>
+      <button class="tab-btn" data-tab="display">Display</button>
+      <button class="tab-btn" data-tab="popup">Popup</button>
+      <button class="tab-btn" data-tab="data">Data</button>
+    </nav>
 
-      <div class="setting-group">
-        <label for="fast-forward-small">Small Fast Forward (seconds)</label>
-        <input type="number" id="fast-forward-small" min="1" max="120" value="10">
-        <span class="hint">Shortcut: Alt+Shift+Right</span>
-      </div>
+    <!-- General Tab -->
+    <div id="general-tab" class="tab-content active">
+      <section class="settings-section">
+        <h2>Playback Controls</h2>
 
-      <div class="setting-group">
-        <label for="fast-forward-large">Large Fast Forward (seconds)</label>
-        <input type="number" id="fast-forward-large" min="1" max="300" value="30">
-        <span class="hint">Shortcut: Alt+Shift+L</span>
-      </div>
-
-      <div class="setting-group">
-        <label for="rewind-small">Rewind (seconds)</label>
-        <input type="number" id="rewind-small" min="1" max="120" value="10">
-        <span class="hint">Shortcut: Alt+Shift+Left</span>
-      </div>
-    </section>
-
-    <section class="settings-section">
-      <h2>Tag Clusters</h2>
-      <p class="section-desc">Group related tags together. When filtering by a clustered tag, all tags in the cluster are included.</p>
-
-      <div id="clusters-list" class="clusters-list">
-        <!-- Clusters will be rendered here -->
-      </div>
-
-      <div class="add-cluster-form">
-        <h3>Add New Cluster</h3>
-        <div class="form-row">
-          <input type="text" id="new-cluster-name" placeholder="Cluster name (e.g., 'gross')">
+        <div class="setting-group">
+          <label for="fast-forward-small">Small Fast Forward (seconds)</label>
+          <input type="number" id="fast-forward-small" min="1" max="120" value="10">
+          <span class="hint">Shortcut: Alt+Shift+Right</span>
         </div>
-        <div class="form-row">
-          <textarea id="new-cluster-tags" rows="2" placeholder="Tags to include (comma-separated, e.g., 'spit, spitting, vomit')"></textarea>
-        </div>
-        <button id="add-cluster-btn" class="btn btn-primary">Add Cluster</button>
-      </div>
-    </section>
 
-    <section class="settings-section">
-      <h2>Display Settings</h2>
-      <p class="section-desc">Customize the appearance of subtitles and pop-up tags.</p>
+        <div class="setting-group">
+          <label for="fast-forward-large">Large Fast Forward (seconds)</label>
+          <input type="number" id="fast-forward-large" min="1" max="300" value="30">
+          <span class="hint">Shortcut: Alt+Shift+L</span>
+        </div>
 
-      <div class="display-subsection">
-        <h3>Subtitle Appearance</h3>
-        <div class="setting-row">
-          <label for="subtitle-font-size">Font Size</label>
-          <input type="range" id="subtitle-font-size" min="12" max="32" value="18">
-          <span id="subtitle-font-size-value" class="range-value">18px</span>
+        <div class="setting-group">
+          <label for="rewind-small">Rewind (seconds)</label>
+          <input type="number" id="rewind-small" min="1" max="120" value="10">
+          <span class="hint">Shortcut: Alt+Shift+Left</span>
         </div>
-        <div class="setting-row">
-          <label for="subtitle-font-family">Font</label>
-          <select id="subtitle-font-family">
-            <option value="system">System Default</option>
-            <option value="sans-serif">Sans-serif</option>
-            <option value="serif">Serif</option>
-            <option value="monospace">Monospace</option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <label>Text Color</label>
-          <input type="color" id="subtitle-text-color" value="#ffffff">
-        </div>
-        <div class="setting-row">
-          <label>Background</label>
-          <input type="color" id="subtitle-bg-color" value="#000000">
-          <input type="range" id="subtitle-bg-opacity" min="0" max="100" value="80">
-          <span id="subtitle-bg-opacity-value" class="range-value">80%</span>
-        </div>
-        <div class="setting-row">
-          <label for="subtitle-position">Position</label>
-          <select id="subtitle-position">
-            <option value="bottom-center">Bottom Center</option>
-            <option value="bottom-left">Bottom Left</option>
-            <option value="bottom-right">Bottom Right</option>
-          </select>
-        </div>
-        <div class="preview-box">
-          <label>Preview:</label>
-          <div id="subtitle-preview" class="subtitle-preview">Sample subtitle text</div>
-        </div>
-      </div>
+      </section>
 
-      <div class="display-subsection">
-        <h3>Pop Tag Appearance</h3>
-        <div class="setting-row">
-          <label>Theme</label>
-          <div class="theme-options">
-            <label class="theme-option">
-              <input type="radio" name="pop-tag-preset" value="default" checked>
-              <span class="theme-label">Default</span>
-            </label>
-            <label class="theme-option">
-              <input type="radio" name="pop-tag-preset" value="ios">
-              <span class="theme-label theme-ios">iOS</span>
-            </label>
-            <label class="theme-option">
-              <input type="radio" name="pop-tag-preset" value="android">
-              <span class="theme-label theme-android">Android</span>
-            </label>
-            <label class="theme-option">
-              <input type="radio" name="pop-tag-preset" value="custom">
-              <span class="theme-label">Custom</span>
-            </label>
+      <section class="settings-section">
+        <h2>Keyboard Shortcuts</h2>
+        <p class="section-desc">Customize shortcuts in <a href="#" id="shortcuts-link">Chrome's extension shortcuts</a>.</p>
+
+        <table class="shortcuts-table">
+          <tr>
+            <td><kbd>Alt+Shift+C</kbd></td>
+            <td>Close current tab</td>
+          </tr>
+          <tr>
+            <td><kbd>Alt+Shift+Right</kbd></td>
+            <td>Fast forward (small)</td>
+          </tr>
+          <tr>
+            <td><kbd>Alt+Shift+L</kbd></td>
+            <td>Fast forward (large)</td>
+          </tr>
+          <tr>
+            <td><kbd>Alt+Shift+Left</kbd></td>
+            <td>Rewind</td>
+          </tr>
+          <tr>
+            <td><kbd>Ctrl+Shift+A</kbd></td>
+            <td>Jump to "Action Start" tag</td>
+          </tr>
+        </table>
+      </section>
+    </div>
+
+    <!-- Tags Tab -->
+    <div id="tags-tab" class="tab-content">
+      <section class="settings-section">
+        <h2>Tag Clusters</h2>
+        <p class="section-desc">Group related tags together. When filtering by a clustered tag, all tags in the cluster are included.</p>
+
+        <div id="clusters-list" class="clusters-list">
+          <!-- Clusters will be rendered here -->
+        </div>
+
+        <div class="add-cluster-form">
+          <h3>Add New Cluster</h3>
+          <div class="form-row">
+            <input type="text" id="new-cluster-name" placeholder="Cluster name (e.g., 'gross')">
           </div>
+          <div class="form-row">
+            <textarea id="new-cluster-tags" rows="2" placeholder="Tags to include (comma-separated, e.g., 'spit, spitting, vomit')"></textarea>
+          </div>
+          <button id="add-cluster-btn" class="btn btn-primary">Add Cluster</button>
         </div>
-        <div id="pop-tag-custom-options" class="custom-options hidden">
+      </section>
+    </div>
+
+    <!-- Display Tab -->
+    <div id="display-tab" class="tab-content">
+      <section class="settings-section">
+        <h2>Display Settings</h2>
+        <p class="section-desc">Customize the appearance of subtitles and pop-up tags.</p>
+
+        <div class="display-subsection">
+          <h3>Subtitle Appearance</h3>
           <div class="setting-row">
-            <label for="pop-tag-font-size">Font Size</label>
-            <input type="range" id="pop-tag-font-size" min="16" max="48" value="28">
-            <span id="pop-tag-font-size-value" class="range-value">28px</span>
+            <label for="subtitle-font-size">Font Size</label>
+            <input type="range" id="subtitle-font-size" min="12" max="32" value="18">
+            <span id="subtitle-font-size-value" class="range-value">18px</span>
+          </div>
+          <div class="setting-row">
+            <label for="subtitle-font-family">Font</label>
+            <select id="subtitle-font-family">
+              <option value="system">System Default</option>
+              <option value="sans-serif">Sans-serif</option>
+              <option value="serif">Serif</option>
+              <option value="monospace">Monospace</option>
+            </select>
           </div>
           <div class="setting-row">
             <label>Text Color</label>
-            <input type="color" id="pop-tag-text-color" value="#ffffff">
+            <input type="color" id="subtitle-text-color" value="#ffffff">
           </div>
           <div class="setting-row">
             <label>Background</label>
-            <input type="color" id="pop-tag-bg-color" value="#000000">
+            <input type="color" id="subtitle-bg-color" value="#000000">
+            <input type="range" id="subtitle-bg-opacity" min="0" max="100" value="80">
+            <span id="subtitle-bg-opacity-value" class="range-value">80%</span>
           </div>
-        </div>
-        <div class="setting-row">
-          <label for="pop-tag-position">Position</label>
-          <select id="pop-tag-position">
-            <option value="bottom-center">Bottom Center</option>
-            <option value="bottom-left">Bottom Left</option>
-            <option value="bottom-right">Bottom Right</option>
-          </select>
-        </div>
-        <div class="preview-box">
-          <label>Preview:</label>
-          <div id="pop-tag-preview" class="pop-tag-preview">Sample pop tag</div>
-        </div>
-        <div class="setting-row sound-settings">
-          <label class="checkbox-label">
-            <input type="checkbox" id="pop-tag-sound-enabled">
-            <span>Play sound when pop tag appears</span>
-          </label>
-        </div>
-        <div id="sound-options" class="sound-options hidden">
           <div class="setting-row">
-            <label for="pop-tag-sound-type">Sound</label>
-            <select id="pop-tag-sound-type">
-              <option value="chime">Chime (iMessage style)</option>
-              <option value="ding">Ding (Bell)</option>
-              <option value="pop">Pop</option>
-              <option value="bubble">Bubble</option>
+            <label for="subtitle-position">Position</label>
+            <select id="subtitle-position">
+              <option value="bottom-center">Bottom Center</option>
+              <option value="bottom-left">Bottom Left</option>
+              <option value="bottom-right">Bottom Right</option>
             </select>
-            <button id="test-sound-btn" class="btn btn-secondary btn-small">Test</button>
+          </div>
+          <div class="preview-box">
+            <label>Preview:</label>
+            <div id="subtitle-preview" class="subtitle-preview">Sample subtitle text</div>
           </div>
         </div>
-      </div>
-    </section>
 
-    <section class="settings-section">
-      <h2>Keyboard Shortcuts</h2>
-      <p class="section-desc">Customize shortcuts in <a href="#" id="shortcuts-link">Chrome's extension shortcuts</a>.</p>
+        <div class="display-subsection">
+          <h3>Pop Tag Appearance</h3>
+          <div class="setting-row">
+            <label>Theme</label>
+            <div class="theme-options">
+              <label class="theme-option">
+                <input type="radio" name="pop-tag-preset" value="default" checked>
+                <span class="theme-label">Default</span>
+              </label>
+              <label class="theme-option">
+                <input type="radio" name="pop-tag-preset" value="ios">
+                <span class="theme-label theme-ios">iOS</span>
+              </label>
+              <label class="theme-option">
+                <input type="radio" name="pop-tag-preset" value="android">
+                <span class="theme-label theme-android">Android</span>
+              </label>
+              <label class="theme-option">
+                <input type="radio" name="pop-tag-preset" value="custom">
+                <span class="theme-label">Custom</span>
+              </label>
+            </div>
+          </div>
+          <div id="pop-tag-custom-options" class="custom-options hidden">
+            <div class="setting-row">
+              <label for="pop-tag-font-size">Font Size</label>
+              <input type="range" id="pop-tag-font-size" min="16" max="48" value="28">
+              <span id="pop-tag-font-size-value" class="range-value">28px</span>
+            </div>
+            <div class="setting-row">
+              <label>Text Color</label>
+              <input type="color" id="pop-tag-text-color" value="#ffffff">
+            </div>
+            <div class="setting-row">
+              <label>Background</label>
+              <input type="color" id="pop-tag-bg-color" value="#000000">
+            </div>
+          </div>
+          <div class="setting-row">
+            <label for="pop-tag-position">Position</label>
+            <select id="pop-tag-position">
+              <option value="bottom-center">Bottom Center</option>
+              <option value="bottom-left">Bottom Left</option>
+              <option value="bottom-right">Bottom Right</option>
+            </select>
+          </div>
+          <div class="preview-box">
+            <label>Preview:</label>
+            <div id="pop-tag-preview" class="pop-tag-preview">Sample pop tag</div>
+          </div>
+          <div class="setting-row sound-settings">
+            <label class="checkbox-label">
+              <input type="checkbox" id="pop-tag-sound-enabled">
+              <span>Play sound when pop tag appears</span>
+            </label>
+          </div>
+          <div id="sound-options" class="sound-options hidden">
+            <div class="setting-row">
+              <label for="pop-tag-sound-type">Sound</label>
+              <select id="pop-tag-sound-type">
+                <option value="chime">Chime (iMessage style)</option>
+                <option value="ding">Ding (Bell)</option>
+                <option value="pop">Pop</option>
+                <option value="bubble">Bubble</option>
+              </select>
+              <button id="test-sound-btn" class="btn btn-secondary btn-small">Test</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
 
-      <table class="shortcuts-table">
-        <tr>
-          <td><kbd>Alt+Shift+C</kbd></td>
-          <td>Close current tab</td>
-        </tr>
-        <tr>
-          <td><kbd>Alt+Shift+Right</kbd></td>
-          <td>Fast forward (small)</td>
-        </tr>
-        <tr>
-          <td><kbd>Alt+Shift+L</kbd></td>
-          <td>Fast forward (large)</td>
-        </tr>
-        <tr>
-          <td><kbd>Alt+Shift+Left</kbd></td>
-          <td>Rewind</td>
-        </tr>
-        <tr>
-          <td><kbd>Ctrl+Shift+A</kbd></td>
-          <td>Jump to "Action Start" tag</td>
-        </tr>
-      </table>
-    </section>
+    <!-- Popup Tab -->
+    <div id="popup-tab" class="tab-content">
+      <section class="settings-section">
+        <h2>Popup Settings</h2>
+        <p class="section-desc">Configure how the popup extension window appears and which panels are visible.</p>
 
-    <section class="settings-section">
-      <h2>Data Management</h2>
+        <div class="display-subsection">
+          <h3>Tag Display Limits</h3>
+          <div class="setting-group">
+            <label for="last-tags-count">Number of Last Tags to show</label>
+            <input type="number" id="last-tags-count" min="1" max="50" value="10">
+            <span class="hint">Recently used tags displayed in the popup (default: 10)</span>
+          </div>
+          <div class="setting-group">
+            <label for="quick-tags-count">Number of Quick Tags to show</label>
+            <input type="number" id="quick-tags-count" min="1" max="100" value="20">
+            <span class="hint">Most frequently used tags displayed in the popup (default: 20)</span>
+          </div>
+        </div>
 
-      <div class="button-group">
-        <button id="export-data-btn" class="btn btn-secondary">Export All Data</button>
-        <button id="import-data-btn" class="btn btn-secondary">Import Data</button>
-        <button id="clear-data-btn" class="btn btn-danger">Clear All Data</button>
-      </div>
-      <input type="file" id="import-file-input" accept=".json" style="display: none;">
-    </section>
+        <div class="display-subsection">
+          <h3>Visible Panels</h3>
+          <p class="subsection-desc">Choose which panels to show in the popup when a video is detected.</p>
+
+          <div class="panel-toggles">
+            <label class="checkbox-label panel-toggle">
+              <input type="checkbox" id="panel-quick-tags" checked>
+              <span>Quick Tags</span>
+            </label>
+            <label class="checkbox-label panel-toggle">
+              <input type="checkbox" id="panel-last-tags" checked>
+              <span>Last Tags</span>
+            </label>
+            <label class="checkbox-label panel-toggle">
+              <input type="checkbox" id="panel-tag-time-range" checked>
+              <span>Tag Time Range</span>
+            </label>
+            <label class="checkbox-label panel-toggle">
+              <input type="checkbox" id="panel-video-tags" checked>
+              <span>Video Tags</span>
+            </label>
+            <label class="checkbox-label panel-toggle">
+              <input type="checkbox" id="panel-skip-play-mode" checked>
+              <span>Skip/Play Mode</span>
+            </label>
+            <label class="checkbox-label panel-toggle">
+              <input type="checkbox" id="panel-auto-close" checked>
+              <span>Auto-Close Tab</span>
+            </label>
+            <label class="checkbox-label panel-toggle">
+              <input type="checkbox" id="panel-video-rating" checked>
+              <span>Video Rating</span>
+            </label>
+            <label class="checkbox-label panel-toggle">
+              <input type="checkbox" id="panel-subtitles" checked>
+              <span>Subtitles</span>
+            </label>
+            <label class="checkbox-label panel-toggle">
+              <input type="checkbox" id="panel-pattern-matching" checked>
+              <span>Pattern Matching</span>
+            </label>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Data Tab -->
+    <div id="data-tab" class="tab-content">
+      <section class="settings-section">
+        <h2>Data Management</h2>
+
+        <div class="button-group">
+          <button id="export-data-btn" class="btn btn-secondary">Export All Data</button>
+          <button id="import-data-btn" class="btn btn-secondary">Import Data</button>
+          <button id="clear-data-btn" class="btn btn-danger">Clear All Data</button>
+        </div>
+        <input type="file" id="import-file-input" accept=".json" style="display: none;">
+      </section>
+    </div>
 
     <footer>
       <button id="save-btn" class="btn btn-primary btn-large">Save Settings</button>

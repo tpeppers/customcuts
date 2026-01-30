@@ -15,6 +15,23 @@ document.addEventListener('DOMContentLoaded', async () => {
   const saveStatus = document.getElementById('save-status');
   const openManagerLink = document.getElementById('open-manager');
 
+  // Tab navigation elements
+  const tabButtons = document.querySelectorAll('.tab-btn');
+  const tabContents = document.querySelectorAll('.tab-content');
+
+  // Popup settings elements
+  const lastTagsCountInput = document.getElementById('last-tags-count');
+  const quickTagsCountInput = document.getElementById('quick-tags-count');
+  const panelQuickTags = document.getElementById('panel-quick-tags');
+  const panelLastTags = document.getElementById('panel-last-tags');
+  const panelTagTimeRange = document.getElementById('panel-tag-time-range');
+  const panelVideoTags = document.getElementById('panel-video-tags');
+  const panelSkipPlayMode = document.getElementById('panel-skip-play-mode');
+  const panelAutoClose = document.getElementById('panel-auto-close');
+  const panelVideoRating = document.getElementById('panel-video-rating');
+  const panelSubtitles = document.getElementById('panel-subtitles');
+  const panelPatternMatching = document.getElementById('panel-pattern-matching');
+
   // Display settings elements
   const subtitleFontSize = document.getElementById('subtitle-font-size');
   const subtitleFontSizeValue = document.getElementById('subtitle-font-size-value');
@@ -124,6 +141,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('manager/manager.html') });
   });
 
+  // Tab navigation
+  tabButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      tabButtons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      tabContents.forEach(content => content.classList.remove('active'));
+      document.getElementById(`${tab}-tab`).classList.add('active');
+    });
+  });
+
   async function loadSettings() {
     const response = await chrome.runtime.sendMessage({ action: 'getSettings' });
     settings = response;
@@ -159,6 +188,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     updatePopTagCustomVisibility();
     updatePopTagPreview();
     updateSoundOptionsVisibility();
+
+    // Load popup settings
+    const popupSettings = settings.popupSettings || {};
+    lastTagsCountInput.value = popupSettings.lastTagsCount || 10;
+    quickTagsCountInput.value = popupSettings.quickTagsCount || 20;
+
+    // Load panel visibility settings (default all to true)
+    const panels = popupSettings.panels || {};
+    panelQuickTags.checked = panels.quickTags !== false;
+    panelLastTags.checked = panels.lastTags !== false;
+    panelTagTimeRange.checked = panels.tagTimeRange !== false;
+    panelVideoTags.checked = panels.videoTags !== false;
+    panelSkipPlayMode.checked = panels.skipPlayMode !== false;
+    panelAutoClose.checked = panels.autoClose !== false;
+    panelVideoRating.checked = panels.videoRating !== false;
+    panelSubtitles.checked = panels.subtitles !== false;
+    panelPatternMatching.checked = panels.patternMatching !== false;
 
     renderClusters();
   }
@@ -398,6 +444,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       soundEnabled: popTagSoundEnabled.checked,
       soundType: popTagSoundType.value,
       position: popTagPosition.value
+    };
+
+    // Save popup settings
+    settings.popupSettings = {
+      lastTagsCount: parseInt(lastTagsCountInput.value) || 10,
+      quickTagsCount: parseInt(quickTagsCountInput.value) || 20,
+      panels: {
+        quickTags: panelQuickTags.checked,
+        lastTags: panelLastTags.checked,
+        tagTimeRange: panelTagTimeRange.checked,
+        videoTags: panelVideoTags.checked,
+        skipPlayMode: panelSkipPlayMode.checked,
+        autoClose: panelAutoClose.checked,
+        videoRating: panelVideoRating.checked,
+        subtitles: panelSubtitles.checked,
+        patternMatching: panelPatternMatching.checked
+      }
     };
 
     await chrome.runtime.sendMessage({
