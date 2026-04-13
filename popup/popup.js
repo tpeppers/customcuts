@@ -249,8 +249,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const data = await chrome.storage.local.get(videoId);
     const videoData = data[videoId] || {};
 
-    // Subtitles always start off - user must explicitly enable each session
-    subtitlesToggle.checked = false;
+    // Query content script for actual live subtitle state (transcription may still be running)
+    try {
+      const subtitleState = await chrome.tabs.sendMessage(currentTab.id, { action: 'getSubtitleState' });
+      subtitlesToggle.checked = subtitleState?.subtitlesEnabled || false;
+    } catch (e) {
+      subtitlesToggle.checked = false;
+    }
 
     // Check for generated subtitles
     const hasGeneratedSubtitles = videoData.generatedSubtitles && videoData.generatedSubtitles.length > 0;

@@ -17,6 +17,7 @@
       <button class="tab-btn active" data-tab="videos">Videos</button>
       <button class="tab-btn" data-tab="playlists">Playlists</button>
       <button class="tab-btn" data-tab="bookmarks">Bookmarks</button>
+      <button class="tab-btn" data-tab="bgmusic">BG Music</button>
       <button class="tab-btn" data-tab="packs">Packs</button>
     </nav>
 
@@ -192,6 +193,36 @@
 
       <section id="bookmarks-list" class="bookmarks-list">
         <p class="empty-state">Loading bookmarks...</p>
+      </section>
+    </div>
+
+    <!-- BG Music Tab -->
+    <div id="bgmusic-tab" class="tab-content">
+      <section class="bgmusic-controls">
+        <div class="bgmusic-enable-section">
+          <label class="bgmusic-checkbox-label">
+            <input type="checkbox" id="bgmusic-enabled">
+            <span>Enable Background Music</span>
+          </label>
+          <p class="bgmusic-description">When enabled, starting a playlist will also open a tab for the selected background music link.</p>
+        </div>
+      </section>
+
+      <section class="bgmusic-add-section">
+        <h3>Add Music Link</h3>
+        <div class="bgmusic-add-form">
+          <input type="text" id="bgmusic-new-name" placeholder="Name (e.g., Chill Vibes)..." maxlength="100">
+          <input type="text" id="bgmusic-new-url" placeholder="URL (e.g., https://open.spotify.com/playlist/...)...">
+          <button id="bgmusic-add-btn" class="btn btn-primary">Add Link</button>
+        </div>
+      </section>
+
+      <section class="stats-bar">
+        <span id="bgmusic-count">0 links</span>
+      </section>
+
+      <section id="bgmusic-list" class="bgmusic-list">
+        <p class="empty-state">No background music links yet. Add one above!</p>
       </section>
     </div>
 

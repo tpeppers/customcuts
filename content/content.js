@@ -377,8 +377,11 @@
     const data = await chrome.storage.local.get(videoId);
     const videoData = data[videoId] || {};
 
-    // Subtitles always start off - user must explicitly enable each session
-    subtitlesEnabled = false;
+    // Preserve live subtitle state if transcription is already running
+    // (user explicitly enabled it this session); otherwise start off
+    if (!transcriptionActive) {
+      subtitlesEnabled = false;
+    }
 
     // Load generated subtitles if available
     generatedSubtitles = videoData.generatedSubtitles || [];
@@ -1287,6 +1290,14 @@
       case 'getCurrentTime':
         sendResponse({
           currentTime: videoElement ? videoElement.currentTime : 0
+        });
+        break;
+
+      case 'getSubtitleState':
+        sendResponse({
+          subtitlesEnabled: subtitlesEnabled,
+          transcriptionActive: transcriptionActive,
+          displayGeneratedSubtitles: displayGeneratedSubtitles
         });
         break;
 

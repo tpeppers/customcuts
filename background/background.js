@@ -934,6 +934,76 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // Keyboard Commands
 // ============================================================================
 
+async function getActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab || null;
+}
+
+async function updateCurrentVideoData(mutator) {
+  const tab = await getActiveTab();
+  if (!tab || !tab.url) return;
+  const videoId = `video_${tab.url}`;
+  const data = await chrome.storage.local.get(videoId);
+  const videoData = data[videoId] || {};
+  const next = await mutator(videoData, tab);
+  if (next === null) return;
+  if (!next.title && tab.title) next.title = tab.title;
+  await chrome.storage.local.set({ [videoId]: next });
+}
+
+async function queueSkipToNext() {
+  const tab = await getActiveTab();
+  if (!tab) return;
+  const { videoQueue = [] } = await chrome.storage.local.get('videoQueue');
+  if (videoQueue.length === 0) return;
+  const idx = videoQueue.findIndex(v => v.url === tab.url);
+  let target = null;
+  if (idx >= 0 && idx < videoQueue.length - 1) {
+    target = videoQueue[idx + 1];
+  } else if (idx === -1) {
+    target = videoQueue[0];
+  }
+  if (target) {
+    await chrome.tabs.update(tab.id, { url: target.url });
+  }
+}
+
+async function queueRemoveCurrent() {
+  const tab = await getActiveTab();
+  if (!tab) return;
+  const { videoQueue = [] } = await chrome.storage.local.get('videoQueue');
+  const idx = videoQueue.findIndex(v => v.url === tab.url);
+  if (idx < 0) return;
+  videoQueue.splice(idx, 1);
+  await chrome.storage.local.set({ videoQueue });
+}
+
+async function setCurrentVideoP1Rating(value) {
+  await updateCurrentVideoData(async (videoData) => {
+    const ratings = videoData.ratings || {};
+    if (videoData.rating && !ratings.P1) {
+      ratings.P1 = videoData.rating;
+    }
+    ratings.P1 = value;
+    return { ...videoData, ratings };
+  });
+}
+
+async function addQuicktagToCurrentVideo(tagName) {
+  await updateCurrentVideoData(async (videoData) => {
+    const tags = videoData.tags || [];
+    const lower = tagName.toLowerCase();
+    const duplicate = tags.some(t =>
+      t.name.toLowerCase() === lower &&
+      t.startTime === undefined &&
+      t.endTime === undefined
+    );
+    if (duplicate) return null;
+    tags.push({ name: tagName, createdAt: Date.now() });
+    return { ...videoData, tags };
+  });
+}
+
 chrome.commands.onCommand.addListener(async (command) => {
   const settings = await getSettings();
 
@@ -961,6 +1031,26 @@ chrome.commands.onCommand.addListener(async (command) => {
         action: 'rewind',
         seconds: settings.rewindSmall
       });
+      break;
+
+    case 'queue-skip-next':
+      await queueSkipToNext();
+      break;
+
+    case 'queue-remove-current':
+      await queueRemoveCurrent();
+      break;
+
+    case 'rate-p1-one-star':
+      await setCurrentVideoP1Rating(1);
+      break;
+
+    case 'rate-p1-five-stars':
+      await setCurrentVideoP1Rating(5);
+      break;
+
+    case 'quicktag-review':
+      await addQuicktagToCurrentVideo('REVIEW');
       break;
   }
 });

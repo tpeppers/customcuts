@@ -64,6 +64,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   let taggedUrls = new Map(); // url -> { id, tags, ratings }
   let bookmarksSearchTerm = '';
 
+  // BG Music tab elements
+  const bgMusicTab = document.getElementById('bgmusic-tab');
+  const bgMusicEnabledCheckbox = document.getElementById('bgmusic-enabled');
+  const bgMusicNewName = document.getElementById('bgmusic-new-name');
+  const bgMusicNewUrl = document.getElementById('bgmusic-new-url');
+  const bgMusicAddBtn = document.getElementById('bgmusic-add-btn');
+  const bgMusicCount = document.getElementById('bgmusic-count');
+  const bgMusicList = document.getElementById('bgmusic-list');
+
+  // BG Music state
+  let allBgMusicLinks = [];
+  let bgMusicEnabled = false;
+  let bgMusicSelectedUrl = null;
+
   // Packs tab elements
   const packsTab = document.getElementById('packs-tab');
   const currentPackSelect = document.getElementById('current-pack-select');
@@ -176,6 +190,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       videosTab.classList.remove('active');
       playlistsTab.classList.remove('active');
       bookmarksTab.classList.remove('active');
+      bgMusicTab.classList.remove('active');
       packsTab.classList.remove('active');
 
       if (tab === 'videos') {
@@ -187,6 +202,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       } else if (tab === 'bookmarks') {
         bookmarksTab.classList.add('active');
         loadBookmarks();
+      } else if (tab === 'bgmusic') {
+        bgMusicTab.classList.add('active');
+        loadBgMusic();
       } else if (tab === 'packs') {
         packsTab.classList.add('active');
         loadPacks();
@@ -1005,6 +1023,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Save queue to storage
     await chrome.storage.local.set({ videoQueue: queue });
 
+    // Open BG music tab if enabled
+    await maybeOpenBgMusic();
+
     // Navigate to first video
     const firstVideo = queue[0];
     chrome.tabs.create({ url: firstVideo.url });
@@ -1035,6 +1056,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Save queue to storage
     await chrome.storage.local.set({ videoQueue: queue });
+
+    // Open BG music tab if enabled
+    await maybeOpenBgMusic();
 
     // Navigate to first video
     const firstVideo = queue[0];
@@ -1070,10 +1094,136 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Save queue to storage
     await chrome.storage.local.set({ videoQueue: queue });
 
+    // Open BG music tab if enabled
+    await maybeOpenBgMusic();
+
     // Navigate to first video
     const firstVideo = queue[0];
     chrome.tabs.create({ url: firstVideo.url });
   }
+
+  // ==================== BG MUSIC FUNCTIONS ====================
+
+  async function loadBgMusic() {
+    const data = await chrome.storage.local.get(['bgMusicLinks', 'bgMusicEnabled', 'bgMusicSelectedUrl']);
+    allBgMusicLinks = data.bgMusicLinks || [];
+    bgMusicEnabled = data.bgMusicEnabled || false;
+    bgMusicSelectedUrl = data.bgMusicSelectedUrl || null;
+    bgMusicEnabledCheckbox.checked = bgMusicEnabled;
+    renderBgMusic();
+  }
+
+  async function saveBgMusic() {
+    await chrome.storage.local.set({
+      bgMusicLinks: allBgMusicLinks,
+      bgMusicEnabled: bgMusicEnabled,
+      bgMusicSelectedUrl: bgMusicSelectedUrl
+    });
+  }
+
+  function renderBgMusic() {
+    bgMusicCount.textContent = `${allBgMusicLinks.length} link${allBgMusicLinks.length !== 1 ? 's' : ''}`;
+
+    if (allBgMusicLinks.length === 0) {
+      bgMusicList.innerHTML = '<p class="empty-state">No background music links yet. Add one above!</p>';
+      return;
+    }
+
+    bgMusicList.innerHTML = allBgMusicLinks.map((link, index) => `
+      <div class="bgmusic-item" data-index="${index}">
+        <label class="bgmusic-radio-label">
+          <input type="radio" name="bgmusic-selection" value="${escapeHtml(link.url)}" ${link.url === bgMusicSelectedUrl ? 'checked' : ''}>
+        </label>
+        <div class="bgmusic-item-info">
+          <div class="bgmusic-item-name">${escapeHtml(link.name)}</div>
+          <div class="bgmusic-item-url"><a href="${escapeHtml(link.url)}" target="_blank">${escapeHtml(link.url)}</a></div>
+        </div>
+        <div class="bgmusic-item-actions">
+          <button class="video-item-btn move" data-dir="up" data-index="${index}" ${index === 0 ? 'disabled' : ''}>&#8593;</button>
+          <button class="video-item-btn move" data-dir="down" data-index="${index}" ${index === allBgMusicLinks.length - 1 ? 'disabled' : ''}>&#8595;</button>
+          <button class="video-item-btn remove" data-index="${index}">Delete</button>
+        </div>
+      </div>
+    `).join('');
+
+    // Radio button selection handlers
+    bgMusicList.querySelectorAll('input[name="bgmusic-selection"]').forEach(radio => {
+      radio.addEventListener('change', async () => {
+        bgMusicSelectedUrl = radio.value;
+        await saveBgMusic();
+      });
+    });
+
+    // Move handlers
+    bgMusicList.querySelectorAll('.video-item-btn.move').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const idx = parseInt(btn.dataset.index);
+        const dir = btn.dataset.dir;
+        if (dir === 'up' && idx > 0) {
+          [allBgMusicLinks[idx], allBgMusicLinks[idx - 1]] = [allBgMusicLinks[idx - 1], allBgMusicLinks[idx]];
+        } else if (dir === 'down' && idx < allBgMusicLinks.length - 1) {
+          [allBgMusicLinks[idx], allBgMusicLinks[idx + 1]] = [allBgMusicLinks[idx + 1], allBgMusicLinks[idx]];
+        }
+        await saveBgMusic();
+        renderBgMusic();
+      });
+    });
+
+    // Delete handlers
+    bgMusicList.querySelectorAll('.video-item-btn.remove').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const idx = parseInt(btn.dataset.index);
+        const removedUrl = allBgMusicLinks[idx].url;
+        allBgMusicLinks.splice(idx, 1);
+        if (bgMusicSelectedUrl === removedUrl) {
+          bgMusicSelectedUrl = allBgMusicLinks.length > 0 ? allBgMusicLinks[0].url : null;
+        }
+        await saveBgMusic();
+        renderBgMusic();
+      });
+    });
+  }
+
+  async function addBgMusicLink(name, url) {
+    if (!name.trim() || !url.trim()) {
+      alert('Please enter both a name and a URL.');
+      return;
+    }
+    allBgMusicLinks.push({ name: name.trim(), url: url.trim() });
+    if (!bgMusicSelectedUrl) {
+      bgMusicSelectedUrl = url.trim();
+    }
+    await saveBgMusic();
+    renderBgMusic();
+  }
+
+  async function maybeOpenBgMusic() {
+    // Always read fresh from storage so it works even if BG Music tab hasn't been visited
+    const data = await chrome.storage.local.get(['bgMusicEnabled', 'bgMusicSelectedUrl']);
+    if (data.bgMusicEnabled && data.bgMusicSelectedUrl) {
+      chrome.tabs.create({ url: data.bgMusicSelectedUrl });
+    }
+  }
+
+  // BG Music event listeners
+  bgMusicEnabledCheckbox.addEventListener('change', async () => {
+    bgMusicEnabled = bgMusicEnabledCheckbox.checked;
+    await saveBgMusic();
+  });
+
+  bgMusicAddBtn.addEventListener('click', async () => {
+    await addBgMusicLink(bgMusicNewName.value, bgMusicNewUrl.value);
+    bgMusicNewName.value = '';
+    bgMusicNewUrl.value = '';
+  });
+
+  bgMusicNewUrl.addEventListener('keydown', async (e) => {
+    if (e.key === 'Enter') {
+      await addBgMusicLink(bgMusicNewName.value, bgMusicNewUrl.value);
+      bgMusicNewName.value = '';
+      bgMusicNewUrl.value = '';
+    }
+  });
 
   // ==================== LIVE GENERATED PLAYLIST FUNCTIONS ====================
 
@@ -1198,6 +1348,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Save queue to storage
     await chrome.storage.local.set({ videoQueue: queue });
 
+    // Open BG music tab if enabled
+    await maybeOpenBgMusic();
+
     // Navigate to first video
     const firstVideo = queue[0];
     chrome.tabs.create({ url: firstVideo.url });
@@ -1226,6 +1379,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Save queue to storage
     await chrome.storage.local.set({ videoQueue: queue });
+
+    // Open BG music tab if enabled
+    await maybeOpenBgMusic();
 
     // Navigate to first video
     const firstVideo = queue[0];
