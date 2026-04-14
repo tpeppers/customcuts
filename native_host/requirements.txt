@@ -11,3 +11,4 @@ numpy>=1.24.0
 
 # Streaming host (customcuts_host.py) - needed for Roku/Chromecast streaming
 yt-dlp>=2024.1.0
+qrcode>=7.0,<8

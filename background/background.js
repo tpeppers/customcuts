@@ -708,6 +708,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       rokuHost.pushCurrentQueue().then(sendResponse);
       return true;
 
+    case 'rokuPushPlaylists':
+      rokuHost.pushCurrentPlaylists().then(sendResponse);
+      return true;
+
     case 'rokuEnqueueCommand':
       rokuHost.enqueueCommand(message.commandName, message.args || {}).then(sendResponse);
       return true;
@@ -726,6 +730,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'rokuRotateAuthToken':
       rokuHost.rotateAuthToken().then(sendResponse);
+      return true;
+
+    case 'rokuGetRemoteQr':
+      rokuHost.getRemoteQr().then(sendResponse);
       return true;
 
     case 'getSettings':

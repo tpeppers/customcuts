@@ -167,7 +167,18 @@
                 <button id="roku-copy-host-token" class="btn btn-secondary">Copy host|token</button>
                 <button id="roku-rotate-token" class="btn btn-secondary">Rotate</button>
               </div>
-              <div class="roku-hint">LAN auto-discovery pushes the token to the Roku automatically. For manual setup, paste <code>host|token</code> into the on-TV keyboard dialog.</div>
+              <div class="roku-phone-remote">
+                <div class="roku-phone-remote-qr" id="roku-phone-qr"></div>
+                <div class="roku-phone-remote-info">
+                  <div><strong>Phone remote URL:</strong></div>
+                  <code id="roku-phone-url">—</code>
+                  <div class="roku-row">
+                    <button id="roku-copy-phone-url" class="btn btn-secondary">Copy URL</button>
+                    <button id="roku-open-phone-url" class="btn btn-secondary">Open</button>
+                  </div>
+                </div>
+              </div>
+              <div class="roku-hint">LAN auto-discovery pushes the token to the Roku automatically. Scan the QR with any phone on the same Wi-Fi to use it as a remote, or paste <code>host|token</code> into the on-TV keyboard dialog.</div>
             </div>
           </div>
           <div class="roku-row">

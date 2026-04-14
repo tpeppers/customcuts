@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<title>CustomCuts Remote</title>
+<style>
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: #0f172a; color: #e2e8f0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 16px; line-height: 1.4;
+  overscroll-behavior: none;
+}
+body {
+  display: flex; flex-direction: column;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.header {
+  padding: 12px 16px; background: #020617;
+  border-bottom: 1px solid #1e293b;
+  display: flex; align-items: center; gap: 10px;
+}
+.header h1 { margin: 0; font-size: 18px; font-weight: 600; color: #fbbf24; }
+.header .status {
+  margin-left: auto; font-size: 12px;
+  padding: 4px 8px; border-radius: 12px;
+  background: #1e293b; color: #94a3b8;
+}
+.header .status.connected { background: #166534; color: #bbf7d0; }
+.header .status.error { background: #7f1d1d; color: #fecaca; }
+
+.tabs { display: flex; background: #020617; border-bottom: 1px solid #1e293b; }
+.tabs button {
+  flex: 1; padding: 14px 8px;
+  background: transparent; border: 0; color: #94a3b8;
+  font-size: 14px; font-weight: 600; cursor: pointer;
+  border-bottom: 3px solid transparent;
+}
+.tabs button.active { color: #fbbf24; border-bottom-color: #fbbf24; }
+
+.view { flex: 1; overflow-y: auto; padding: 16px; -webkit-overflow-scrolling: touch; }
+.view.hidden { display: none; }
+
+/* Now-playing view */
+.np-title {
+  font-size: 18px; font-weight: 600; margin: 0 0 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.np-meta { color: #94a3b8; font-size: 13px; margin-bottom: 12px; }
+.np-progress {
+  height: 6px; background: #1e293b; border-radius: 3px;
+  overflow: hidden; margin-bottom: 6px;
+}
+.np-progress-fill {
+  height: 100%; background: #fbbf24;
+  width: 0; transition: width 0.3s ease;
+}
+.np-times {
+  display: flex; justify-content: space-between;
+  font-size: 12px; color: #94a3b8; font-variant-numeric: tabular-nums;
+  margin-bottom: 20px;
+}
+
+.btn-row {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 10px; margin-bottom: 10px;
+}
+.btn-row.five { grid-template-columns: repeat(5, 1fr); }
+.btn {
+  appearance: none; -webkit-appearance: none;
+  border: 0; border-radius: 8px;
+  background: #1e293b; color: #e2e8f0;
+  padding: 16px 8px; font-size: 16px; font-weight: 600;
+  cursor: pointer; touch-action: manipulation;
+  user-select: none; -webkit-user-select: none;
+}
+.btn:active { background: #334155; transform: scale(0.97); }
+.btn.primary { background: #fbbf24; color: #0f172a; }
+.btn.primary:active { background: #f59e0b; }
+.btn.danger { background: #7f1d1d; color: #fecaca; }
+.btn.wide { grid-column: 1 / -1; }
+.btn.small { padding: 10px 6px; font-size: 14px; }
+.btn .sub { display: block; font-size: 11px; font-weight: 400; opacity: 0.7; margin-top: 2px; }
+
+/* Playlists view */
+.playlist-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 12px; background: #1e293b;
+  border-radius: 8px; margin-bottom: 8px;
+  cursor: pointer; touch-action: manipulation;
+}
+.playlist-item:active { background: #334155; }
+.playlist-item .name { font-weight: 600; }
+.playlist-item .count { font-size: 12px; color: #94a3b8; }
+.playlist-item .actions { display: flex; gap: 6px; }
+.playlist-item .actions .btn { padding: 8px 10px; font-size: 12px; }
+.empty-state { text-align: center; color: #64748b; padding: 30px 0; }
+
+/* Setup view (when no token) */
+.setup {
+  padding: 24px 16px; text-align: center;
+}
+.setup h2 { color: #fbbf24; }
+.setup input[type="text"] {
+  width: 100%; padding: 12px; margin: 12px 0;
+  background: #1e293b; border: 1px solid #334155;
+  border-radius: 6px; color: #e2e8f0; font-size: 16px;
+}
+
+.hint { color: #64748b; font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>CustomCuts Remote</h1>
+  <span class="status" id="status">connecting...</span>
+</div>
+
+<div class="tabs" id="tabs">
+  <button data-tab="np" class="active">Now Playing</button>
+  <button data-tab="pl">Playlists</button>
+</div>
+
+<div id="view-np" class="view">
+  <div class="np-title" id="np-title">—</div>
+  <div class="np-meta" id="np-meta">Not playing</div>
+  <div class="np-progress"><div class="np-progress-fill" id="np-fill"></div></div>
+  <div class="np-times">
+    <span id="np-pos">0:00</span>
+    <span id="np-dur">0:00</span>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn" data-cmd="prev">&laquo; Prev</button>
+    <button class="btn primary" data-cmd="play-toggle" id="btn-play">Pause</button>
+    <button class="btn" data-cmd="next">Next &raquo;</button>
+  </div>
+  <div class="btn-row five">
+    <button class="btn small" data-cmd="rw-30">-30</button>
+    <button class="btn small" data-cmd="rw-10">-10</button>
+    <button class="btn small" data-cmd="rw-5">-5</button>
+    <button class="btn small" data-cmd="ff-10">+10</button>
+    <button class="btn small" data-cmd="ff-30">+30</button>
+  </div>
+  <div class="btn-row">
+    <button class="btn small" data-cmd="refresh">Refresh queue</button>
+    <button class="btn small danger" data-cmd="stop">Stop</button>
+    <button class="btn small" data-cmd="disconnect">Forget host</button>
+  </div>
+</div>
+
+<div id="view-pl" class="view hidden">
+  <div id="pl-list"></div>
+</div>
+
+<div id="view-setup" class="view hidden">
+  <div class="setup">
+    <h2>Pair with CustomCuts</h2>
+    <p>Scan the QR code from the CustomCuts Manager, or paste the URL below.</p>
+    <input type="text" id="setup-url" placeholder="http://192.168.1.42:8787#tok=...">
+    <button class="btn primary wide" id="setup-connect">Connect</button>
+    <div class="hint">Both devices must be on the same Wi-Fi.</div>
+  </div>
+</div>
+
+<script>
+(function(){
+  'use strict';
+
+  // ------------------------------------------------------------------
+  // Connection params: stored in localStorage so the page can be
+  // reopened later. Fragment takes precedence so scanning the QR
+  // overwrites any stale value.
+  // ------------------------------------------------------------------
+  var LS_KEY = 'customcuts-remote-v1';
+
+  function readFragment() {
+    var hash = (location.hash || '').replace(/^#/, '');
+    if (!hash) return null;
+    var out = {};
+    hash.split('&').forEach(function(p){
+      var i = p.indexOf('=');
+      if (i < 0) return;
+      out[decodeURIComponent(p.slice(0,i))] = decodeURIComponent(p.slice(i+1));
+    });
+    // #tok=xyz implies this page's origin is the host
+    if (out.tok) {
+      return { host: location.origin, token: out.tok };
+    }
+    return null;
+  }
+
+  function loadStored() {
+    try {
+      var raw = localStorage.getItem(LS_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (e) { return null; }
+  }
+
+  function save(cfg) {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); } catch (e) {}
+  }
+
+  function clearStored() {
+    try { localStorage.removeItem(LS_KEY); } catch (e) {}
+  }
+
+  var cfg = readFragment() || loadStored();
+  if (cfg) {
+    save(cfg);
+    // Drop the fragment so the token doesn't show in the URL bar
+    if (location.hash) history.replaceState(null, '', location.pathname);
+  }
+
+  // ------------------------------------------------------------------
+  // Fetch wrapper
+  // ------------------------------------------------------------------
+  function api(path, opts) {
+    if (!cfg) return Promise.reject(new Error('not configured'));
+    opts = opts || {};
+    opts.headers = opts.headers || {};
+    opts.headers['X-CC-Auth'] = cfg.token;
+    if (opts.body && typeof opts.body !== 'string') {
+      opts.body = JSON.stringify(opts.body);
+      opts.headers['Content-Type'] = 'application/json';
+    }
+    return fetch(cfg.host + path, opts).then(function(r){
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    });
+  }
+
+  function sendCommand(cmd, args) {
+    return api('/commands', { method: 'POST', body: { cmd: cmd, args: args || {} } });
+  }
+
+  // ------------------------------------------------------------------
+  // UI state
+  // ------------------------------------------------------------------
+  var $ = function(id){ return document.getElementById(id); };
+  var statusEl = $('status');
+  var npTitle = $('np-title'), npMeta = $('np-meta'), npFill = $('np-fill');
+  var npPos = $('np-pos'), npDur = $('np-dur'), btnPlay = $('btn-play');
+  var plList = $('pl-list');
+
+  function setStatus(text, kind) {
+    statusEl.textContent = text;
+    statusEl.className = 'status' + (kind ? ' ' + kind : '');
+  }
+
+  function fmtTime(s) {
+    if (s == null || isNaN(s) || s < 0) s = 0;
+    var mm = Math.floor(s / 60), ss = Math.floor(s % 60);
+    return mm + ':' + (ss < 10 ? '0' + ss : ss);
+  }
+
+  function showView(name) {
+    ['np','pl','setup'].forEach(function(v){
+      var el = $('view-' + v);
+      if (el) el.classList.toggle('hidden', v !== name);
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function(b){
+      b.classList.toggle('active', b.dataset.tab === name);
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Now-playing polling
+  // ------------------------------------------------------------------
+  var pollTimer = null;
+  var lastState = '';
+
+  function poll() {
+    api('/state.json').then(function(state){
+      setStatus('connected', 'connected');
+      var ev = state.last_event;
+      if (ev) {
+        npTitle.textContent = ev.title || ev.url || '(unknown)';
+        npMeta.textContent = 'Index ' + (ev.index != null ? ev.index : '—') + ' · ' + (ev.state || '—');
+        npPos.textContent = fmtTime(ev.position);
+        npDur.textContent = fmtTime(ev.duration);
+        if (ev.duration > 0 && ev.position != null) {
+          var pct = Math.max(0, Math.min(100, (ev.position / ev.duration) * 100));
+          npFill.style.width = pct.toFixed(1) + '%';
+        } else {
+          npFill.style.width = '0';
+        }
+        btnPlay.textContent = (ev.state === 'playing') ? 'Pause' : 'Play';
+        lastState = ev.state || '';
+      } else {
+        npTitle.textContent = '—';
+        npMeta.textContent = 'Nothing playing. Load a playlist.';
+        npPos.textContent = '0:00';
+        npDur.textContent = '0:00';
+        npFill.style.width = '0';
+      }
+    }).catch(function(err){
+      setStatus('offline', 'error');
+    });
+  }
+
+  function startPolling() {
+    if (pollTimer) return;
+    poll();
+    pollTimer = setInterval(poll, 1500);
+  }
+
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  // ------------------------------------------------------------------
+  // Playlists
+  // ------------------------------------------------------------------
+  function renderPlaylists(playlists) {
+    if (!playlists || playlists.length === 0) {
+      plList.innerHTML = '<div class="empty-state">No playlists. Create some in the extension Manager.</div>';
+      return;
+    }
+    plList.innerHTML = '';
+    playlists.forEach(function(p, i){
+      var div = document.createElement('div');
+      div.className = 'playlist-item';
+      var info = document.createElement('div');
+      info.innerHTML = '<div class="name"></div><div class="count"></div>';
+      info.querySelector('.name').textContent = p.name || '(untitled)';
+      info.querySelector('.count').textContent = (p.video_count || 0) + ' videos';
+      var actions = document.createElement('div');
+      actions.className = 'actions';
+      var playBtn = document.createElement('button');
+      playBtn.className = 'btn primary';
+      playBtn.textContent = 'Play';
+      playBtn.addEventListener('click', function(e){
+        e.stopPropagation();
+        sendCommand('load_playlist', { index: i });
+        showView('np');
+      });
+      var shufBtn = document.createElement('button');
+      shufBtn.className = 'btn';
+      shufBtn.textContent = 'Shuffle';
+      shufBtn.addEventListener('click', function(e){
+        e.stopPropagation();
+        sendCommand('load_playlist_shuffled', { index: i });
+        showView('np');
+      });
+      actions.appendChild(playBtn);
+      actions.appendChild(shufBtn);
+      div.appendChild(info);
+      div.appendChild(actions);
+      plList.appendChild(div);
+    });
+  }
+
+  function loadPlaylists() {
+    api('/playlists.json').then(function(data){
+      renderPlaylists(data.playlists || []);
+    }).catch(function(err){
+      plList.innerHTML = '<div class="empty-state">Could not load playlists: ' + err.message + '</div>';
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Wire up
+  // ------------------------------------------------------------------
+  Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function(btn){
+    btn.addEventListener('click', function(){
+      var tab = btn.dataset.tab;
+      showView(tab);
+      if (tab === 'pl') loadPlaylists();
+    });
+  });
+
+  document.addEventListener('click', function(e){
+    var t = e.target;
+    if (!(t instanceof HTMLElement)) return;
+    var cmd = t.dataset.cmd;
+    if (!cmd) return;
+    handleCmd(cmd);
+  });
+
+  function handleCmd(cmd) {
+    switch (cmd) {
+      case 'prev': return sendCommand('prev');
+      case 'next': return sendCommand('next');
+      case 'play-toggle':
+        return sendCommand(lastState === 'playing' ? 'pause' : 'resume');
+      case 'stop': return sendCommand('stop');
+      case 'refresh': return sendCommand('refresh_queue');
+      case 'rw-30': return sendCommand('seek_delta', { delta: -30 });
+      case 'rw-10': return sendCommand('seek_delta', { delta: -10 });
+      case 'rw-5':  return sendCommand('seek_delta', { delta: -5 });
+      case 'ff-10': return sendCommand('seek_delta', { delta: 10 });
+      case 'ff-30': return sendCommand('seek_delta', { delta: 30 });
+      case 'disconnect':
+        clearStored();
+        cfg = null;
+        stopPolling();
+        showView('setup');
+        setStatus('not configured', '');
+        return;
+    }
+  }
+
+  $('setup-connect').addEventListener('click', function(){
+    var raw = $('setup-url').value.trim();
+    if (!raw) return;
+    var m = raw.match(/^(https?:\/\/[^#]+)#(?:tok=)?(.+)$/);
+    if (!m) { alert('URL must look like http://host:port#tok=xxx'); return; }
+    cfg = { host: m[1].replace(/\/$/, ''), token: m[2] };
+    save(cfg);
+    init();
+  });
+
+  function init() {
+    if (!cfg) {
+      showView('setup');
+      setStatus('not configured', '');
+      return;
+    }
+    showView('np');
+    setStatus('connecting...', '');
+    startPolling();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

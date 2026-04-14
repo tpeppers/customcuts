@@ -13,6 +13,7 @@ const HOST_NAME = 'com.customcuts.stream_host';
 let nativePort = null;
 let pendingResolvers = [];
 let queueVersion = 0;
+let playlistsVersion = 0;
 let lastStatus = {
   hosting: false,
   port: null,
@@ -73,6 +74,11 @@ function handleHostMessage(msg) {
     if (msg.auth_token) lastStatus.auth_token = msg.auth_token;
   } else if (msg?.type === 'token_rotated') {
     if (msg.auth_token) lastStatus.auth_token = msg.auth_token;
+  } else if (msg?.type === 'remote_command') {
+    // Phase 5: phone remote asked the extension to do something it
+    // can't do directly over HTTP — currently just load_playlist.
+    handleRemoteCommand(msg.cmd, msg.args || {}).catch(e =>
+      console.error('[roku-host] remote_command handler failed', e));
   } else if (msg?.type === 'roku_event') {
     // Event posted by the Roku channel, relayed through the Python host.
     // msg.event shape: { type, index, url, title, position, state }
@@ -215,6 +221,7 @@ export async function startHosting(port = 8787, bindAddr = '0.0.0.0') {
   );
   if (resp?.ok) {
     await pushCurrentQueue();
+    await pushCurrentPlaylists();
   }
   return resp;
 }
@@ -245,6 +252,11 @@ export async function rotateAuthToken() {
   return resp;
 }
 
+export async function getRemoteQr() {
+  const resp = await sendCommand({ cmd: 'get_remote_qr' }, 'remote_qr');
+  return resp;
+}
+
 export async function pushCurrentQueue() {
   if (!nativePort) return { ok: false, error: 'not hosting' };
   const payload = await buildQueuePayload();
@@ -254,6 +266,69 @@ export async function pushCurrentQueue() {
     'queue_set',
   );
   return { ...resp, count: payload.length };
+}
+
+// Phase 5: serialize saved playlists for the phone remote.
+// The extension is the source of truth for playlists; the host just
+// caches them and exposes /playlists.json. The remote selects one
+// by index, which is relayed back here via remote_command.
+async function buildPlaylistsPayload() {
+  const data = await chrome.storage.local.get('playlists');
+  const playlists = Array.isArray(data.playlists) ? data.playlists : [];
+  return playlists.map((p, i) => ({
+    index: i,
+    name: p?.name || `Playlist ${i + 1}`,
+    video_count: Array.isArray(p?.videos) ? p.videos.length : 0,
+  }));
+}
+
+export async function pushCurrentPlaylists() {
+  if (!nativePort) return { ok: false, error: 'not hosting' };
+  const payload = await buildPlaylistsPayload();
+  playlistsVersion += 1;
+  const resp = await sendCommand(
+    { cmd: 'set_playlists', playlists: payload, version: playlistsVersion },
+    'playlists_set',
+  );
+  return { ...resp, count: payload.length };
+}
+
+async function loadPlaylistByIndex(index, shuffled) {
+  const data = await chrome.storage.local.get('playlists');
+  const playlists = Array.isArray(data.playlists) ? data.playlists : [];
+  const pl = playlists[index];
+  if (!pl || !Array.isArray(pl.videos) || pl.videos.length === 0) {
+    console.warn('[roku-host] load_playlist: no videos at index', index);
+    return false;
+  }
+  let queue = pl.videos.map(v => ({ url: v.url, title: v.title }));
+  if (shuffled) {
+    for (let i = queue.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [queue[i], queue[j]] = [queue[j], queue[i]];
+    }
+  }
+  await chrome.storage.local.set({ videoQueue: queue });
+  // storage.onChanged below will auto-push to the host.
+  return true;
+}
+
+async function handleRemoteCommand(cmd, args) {
+  if (cmd === 'load_playlist' || cmd === 'load_playlist_shuffled') {
+    const shuffled = cmd === 'load_playlist_shuffled';
+    const ok = await loadPlaylistByIndex(args.index | 0, shuffled);
+    if (!ok) return;
+    // storage.onChanged triggers pushCurrentQueue asynchronously; wait a
+    // tick so the push lands before we tell the Roku to refresh.
+    setTimeout(() => {
+      sendCommand({
+        cmd: 'enqueue_command',
+        command_name: 'refresh_queue',
+        args: {},
+      }, 'command_enqueued').catch(e =>
+        console.error('[roku-host] refresh_queue after load failed', e));
+    }, 200);
+  }
 }
 
 export function getLastStatus() {
@@ -372,7 +447,7 @@ export async function handleCommandForRoku(command, settings) {
   }
 }
 
-// Auto-push on storage changes (queue or tag/cut edits)
+// Auto-push on storage changes (queue, playlists, or tag/cut edits)
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   if (!nativePort) return;
@@ -389,5 +464,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (relevantTopLevel || perVideoChanged) {
     pushCurrentQueue().catch(e =>
       console.error('[roku-host] pushCurrentQueue failed', e));
+  }
+  if ('playlists' in changes) {
+    pushCurrentPlaylists().catch(e =>
+      console.error('[roku-host] pushCurrentPlaylists failed', e));
   }
 });

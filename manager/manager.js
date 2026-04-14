@@ -3055,6 +3055,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const rokuAuthToken = document.getElementById('roku-auth-token');
   const rokuCopyHostToken = document.getElementById('roku-copy-host-token');
   const rokuRotateToken = document.getElementById('roku-rotate-token');
+  const rokuPhoneQr = document.getElementById('roku-phone-qr');
+  const rokuPhoneUrl = document.getElementById('roku-phone-url');
+  const rokuCopyPhoneUrl = document.getElementById('roku-copy-phone-url');
+  const rokuOpenPhoneUrl = document.getElementById('roku-open-phone-url');
   const rokuForwardKeysCheckbox = document.getElementById('roku-forward-keys');
   const rokuNowPlaying = document.getElementById('roku-now-playing');
   const rokuNpTitle = document.getElementById('roku-np-title');
@@ -3079,6 +3083,30 @@ document.addEventListener('DOMContentLoaded', async () => {
   let currentHostLan = null;
   let currentHostPort = null;
   let currentAuthToken = null;
+  let currentPhoneUrl = null;
+
+  async function refreshPhoneRemote() {
+    if (!rokuPhoneQr) return;
+    try {
+      const resp = await chrome.runtime.sendMessage({ action: 'rokuGetRemoteQr' });
+      if (resp?.ok && resp.url) {
+        currentPhoneUrl = resp.url;
+        rokuPhoneUrl.textContent = resp.url;
+        rokuPhoneUrl.title = resp.url;
+        if (resp.svg) {
+          rokuPhoneQr.innerHTML = resp.svg;
+        } else {
+          rokuPhoneQr.textContent = '(install `qrcode` in the customcuts env to see a QR here)';
+        }
+      } else {
+        currentPhoneUrl = null;
+        rokuPhoneUrl.textContent = '—';
+        rokuPhoneQr.textContent = '(start hosting first)';
+      }
+    } catch (e) {
+      rokuPhoneQr.textContent = '(error: ' + e.message + ')';
+    }
+  }
 
   function updateRokuUI(status) {
     const hosting = !!status?.hosting;
@@ -3100,6 +3128,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         ? currentAuthToken
         : '(unknown)';
       rokuUrls.classList.remove('hidden');
+      refreshPhoneRemote();
     } else {
       rokuStatusText.textContent = 'Not hosting';
       rokuStatusText.style.color = '';
@@ -3107,6 +3136,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       rokuNowPlaying.classList.add('hidden');
       currentHostLan = null;
       currentHostPort = null;
+      currentPhoneUrl = null;
     }
   }
 
@@ -3207,12 +3237,30 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (resp?.ok && resp.auth_token) {
         currentAuthToken = resp.auth_token;
         rokuAuthToken.textContent = currentAuthToken;
+        refreshPhoneRemote();
       } else {
         alert('Rotate failed: ' + (resp?.error || 'unknown'));
       }
     } catch (e) {
       alert('Error: ' + e.message);
     }
+  });
+
+  rokuCopyPhoneUrl.addEventListener('click', async () => {
+    if (!currentPhoneUrl) return;
+    try {
+      await navigator.clipboard.writeText(currentPhoneUrl);
+      const prev = rokuCopyPhoneUrl.textContent;
+      rokuCopyPhoneUrl.textContent = 'Copied!';
+      setTimeout(() => { rokuCopyPhoneUrl.textContent = prev; }, 1500);
+    } catch (e) {
+      alert('Copy failed: ' + e.message);
+    }
+  });
+
+  rokuOpenPhoneUrl.addEventListener('click', () => {
+    if (!currentPhoneUrl) return;
+    chrome.tabs.create({ url: currentPhoneUrl });
   });
 
   // Forward keyboard shortcuts to Roku toggle

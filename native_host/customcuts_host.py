@@ -37,6 +37,7 @@ if sys.platform == 'win32':
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(_SCRIPT_DIR, 'customcuts_host.log')
 TOKEN_FILE = os.path.join(_SCRIPT_DIR, 'customcuts_host.token')
+REMOTE_APP_DIR = os.path.join(_SCRIPT_DIR, 'remote_app')
 LOG_LEVEL = 2  # 0=ERROR 1=WARN 2=INFO 3=DEBUG
 _log_lock = threading.Lock()
 
@@ -95,6 +96,13 @@ _command_queue = []  # list of {seq, cmd, args, enqueued_at}
 _command_next_seq = 1
 _COMMAND_TTL = 60  # seconds before a command is dropped if unpolled
 
+# Phase 5: playlists pushed from the extension, exposed on /playlists.json
+# so the phone remote can browse and pick one to play. Last event posted by
+# the Roku is mirrored here for /state.json so the phone remote can show
+# a now-playing display without going through the extension.
+_playlists_state = {'playlists': [], 'version': 0}
+_last_event = None
+
 _server = None
 _server_thread = None
 _server_bind = None
@@ -133,6 +141,38 @@ def load_or_generate_token():
         log(f'auth: token write failed: {ex}', 0)
     _auth_token = tok
     return tok
+
+
+def build_remote_url():
+    """URL the phone remote should open. Uses the current LAN IP + port.
+    The token lives in the fragment so it doesn't hit the server access log."""
+    if not _server_port:
+        return None
+    lan = get_lan_ip()
+    tok = _auth_token or ''
+    return f'http://{lan}:{_server_port}/remote#tok={tok}'
+
+
+def build_remote_qr_svg(url):
+    """Return an SVG string rendering of the URL as a QR code, or None if
+    the qrcode library is not installed."""
+    try:
+        import qrcode
+        from qrcode.image.svg import SvgPathImage
+    except ImportError:
+        return None
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10, border=2,
+    )
+    qr.add_data(url)
+    qr.make(fit=True)
+    import io
+    buf = io.BytesIO()
+    img = qr.make_image(image_factory=SvgPathImage)
+    img.save(buf)
+    return buf.getvalue().decode('utf-8')
 
 
 def rotate_token():
@@ -372,10 +412,37 @@ class CCHandler(BaseHTTPRequestHandler):
                     return dict(e)
         return None
 
+    def _serve_static(self, filename, ctype):
+        """Serve a file from the bundled remote_app/ directory."""
+        full = os.path.join(REMOTE_APP_DIR, filename)
+        if not os.path.exists(full):
+            self.send_error(404, 'not found')
+            return
+        try:
+            with open(full, 'rb') as f:
+                data = f.read()
+        except OSError as ex:
+            self.send_error(500, f'read failed: {ex}')
+            return
+        self.send_response(200)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(data)
+
     # Routes --------------------------------------------------------------
     def do_GET(self):
         path = urlparse(self.path).path
         try:
+            # Phone remote: intentionally unauthenticated so the page can
+            # load before JS has parsed the token from the URL fragment.
+            # All subsequent /state.json, /playlists.json, POST /commands
+            # calls require X-CC-Auth.
+            if path == '/' or path == '/remote' or path == '/remote/':
+                self._serve_static('index.html', 'text/html; charset=utf-8')
+                return
+
             if path == '/healthz':
                 with _state_lock:
                     v = _queue_state['version']
@@ -398,6 +465,27 @@ class CCHandler(BaseHTTPRequestHandler):
                     for c in cmds
                 ]
                 self._json(200, {'commands': out, 'next_seq': next_seq})
+                return
+
+            if path == '/playlists.json':
+                if not self._check_auth(): return
+                with _state_lock:
+                    p = {
+                        'version': _playlists_state['version'],
+                        'playlists': [dict(pl) for pl in _playlists_state['playlists']],
+                    }
+                self._json(200, p)
+                return
+
+            if path == '/state.json':
+                if not self._check_auth(): return
+                with _state_lock:
+                    state = {
+                        'queue_version': _queue_state['version'],
+                        'queue_count': len(_queue_state['queue']),
+                        'last_event': dict(_last_event) if _last_event else None,
+                    }
+                self._json(200, state)
                 return
 
             if path == '/queue.json':
@@ -474,13 +562,53 @@ class CCHandler(BaseHTTPRequestHandler):
                 payload = json.loads(body.decode('utf-8')) if body else {}
             except Exception:
                 payload = {'raw': body.decode('utf-8', errors='replace')}
-            log(f'roku event: {payload}', 2)
+            log(f'roku event: {payload}', 3)
+            global _last_event
+            with _state_lock:
+                _last_event = dict(payload) if isinstance(payload, dict) else None
             try:
                 send_message({'type': 'roku_event', 'event': payload})
             except Exception as ex:
                 log(f'relay event failed: {ex}', 1)
             self._json(200, {'ok': True})
             return
+
+        if path == '/commands':
+            # Phase 5: phone remote enqueues commands over HTTP. The Roku
+            # already polls /commands via GET, so POSTing here writes to the
+            # same queue. load_playlist is also relayed to the extension so
+            # it can swap the videoQueue, which auto-pushes to the Roku.
+            if not self._check_auth(): return
+            length = int(self.headers.get('Content-Length', '0'))
+            body = self.rfile.read(length) if length else b''
+            try:
+                payload = json.loads(body.decode('utf-8')) if body else {}
+            except Exception:
+                self._json(400, {'error': 'invalid JSON'})
+                return
+            cmd_name = payload.get('cmd')
+            args = payload.get('args') or {}
+            if not cmd_name:
+                self._json(400, {'error': 'missing cmd'})
+                return
+            seq = enqueue_command_internal(cmd_name, args)
+            if cmd_name in ('load_playlist', 'load_playlist_shuffled'):
+                # The extension handles the actual load by rewriting
+                # videoQueue, which auto-pushes to the host. The refresh
+                # nudge to the Roku is enqueued by the extension AFTER
+                # set_queue completes, to avoid a race where the Roku
+                # re-fetches the stale queue.
+                try:
+                    send_message({
+                        'type': 'remote_command',
+                        'cmd': cmd_name,
+                        'args': args,
+                    })
+                except Exception as ex:
+                    log(f'relay remote_command failed: {ex}', 1)
+            self._json(200, {'ok': True, 'seq': seq})
+            return
+
         self.send_error(404, 'not found')
 
     def _proxy_stream(self, url, headers):
@@ -596,6 +724,16 @@ def set_queue(queue, version):
     }
 
 
+def set_playlists(playlists, version):
+    with _state_lock:
+        _playlists_state['playlists'] = list(playlists)
+        _playlists_state['version'] = version
+    return {
+        'type': 'playlists_set', 'ok': True,
+        'count': len(playlists), 'version': version,
+    }
+
+
 def handle_command(msg):
     cmd = msg.get('cmd')
     if cmd == 'ping':
@@ -609,6 +747,10 @@ def handle_command(msg):
         return stop_hosting()
     if cmd == 'set_queue':
         return set_queue(msg.get('queue', []), msg.get('version', 0))
+    if cmd == 'set_playlists':
+        return set_playlists(
+            msg.get('playlists', []), msg.get('version', 0),
+        )
     if cmd == 'enqueue_command':
         seq = enqueue_command_internal(
             msg.get('command_name'),
@@ -635,6 +777,18 @@ def handle_command(msg):
         }
     if cmd == 'rotate_token':
         return rotate_token()
+    if cmd == 'get_remote_qr':
+        url = build_remote_url()
+        if url is None:
+            return {
+                'type': 'remote_qr', 'ok': False,
+                'error': 'not hosting',
+            }
+        svg = build_remote_qr_svg(url)
+        return {
+            'type': 'remote_qr', 'ok': True,
+            'url': url, 'svg': svg,
+        }
     return {'type': 'error', 'error': f'unknown cmd: {cmd}'}
 
 
