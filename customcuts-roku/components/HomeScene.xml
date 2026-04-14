@@ -8,6 +8,11 @@
             <LabelList id="queueList" itemSize="[1200, 56]" numRows="10" visible="false" />
         </LayoutGroup>
         <Video id="videoPlayer" visible="false" width="1920" height="1080" translation="[0, 0]" />
+        <Group id="progressGroup" translation="[60, 1000]" visible="false">
+            <Label id="progressTimeLabel" translation="[0, -34]" font="font:SmallBoldSystemFont" color="0xFFFFFFFF" text="0:00 / 0:00" />
+            <Rectangle id="progressBarBg" width="1800" height="10" color="0x000000AA" />
+            <Rectangle id="progressBarFill" width="0" height="10" color="0xFFCC00FF" />
+        </Group>
         <QueueTask id="queueTask" />
         <CommandTask id="cmdTask" />
         <EventTask id="eventTask" />

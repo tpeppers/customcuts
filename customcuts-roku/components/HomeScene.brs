@@ -22,6 +22,9 @@ sub init()
     m.discoveryTask = m.top.findNode("discoveryTask")
     m.cmdTimer = m.top.findNode("cmdTimer")
     m.eventTimer = m.top.findNode("eventTimer")
+    m.progressGroup = m.top.findNode("progressGroup")
+    m.progressBarFill = m.top.findNode("progressBarFill")
+    m.progressTimeLabel = m.top.findNode("progressTimeLabel")
 
     m.queue = []
     m.currentIndex = -1
@@ -61,6 +64,40 @@ sub runDiscovery()
     m.statusLabel.text = "Searching for CustomCuts host on LAN..."
     m.discoveryTask.timeoutMs = 3000
     m.discoveryTask.control = "RUN"
+end sub
+
+' Phase 4: host unreachable → drop stored URL/token and re-discover.
+' Thresholds: 3 consecutive /queue.json failures OR 10 consecutive
+' /commands poll failures (10 * ~1s = ~10s of silence).
+sub noteQueueFailure()
+    m.queueFailureCount = m.queueFailureCount + 1
+    if m.queueFailureCount >= 3 then
+        triggerRediscovery("queue fetch")
+    end if
+end sub
+
+sub noteCommandFailure()
+    m.commandFailureCount = m.commandFailureCount + 1
+    if m.commandFailureCount >= 10 then
+        triggerRediscovery("command poll")
+    end if
+end sub
+
+sub triggerRediscovery(reason as string)
+    print "re-discovery triggered by: "; reason
+    m.cmdTimer.control = "stop"
+    m.eventTimer.control = "stop"
+    m.videoPlayer.control = "stop"
+    m.videoPlayer.visible = false
+    m.progressGroup.visible = false
+    m.hostUrl = ""
+    m.authToken = ""
+    saveHostUrl("")
+    saveAuthToken("")
+    m.queueFailureCount = 0
+    m.commandFailureCount = 0
+    m.statusLabel.text = "Host unreachable (" + reason + ") - searching again..."
+    runDiscovery()
 end sub
 
 sub onDiscoveryDone()
@@ -183,17 +220,21 @@ sub onQueueFetched()
     result = m.queueTask.result
     if result = invalid then
         m.statusLabel.text = "Fetch failed: no response."
+        noteQueueFailure()
         return
     end if
     if result.error <> invalid and result.error <> "" then
         m.statusLabel.text = "Fetch failed: " + result.error
+        noteQueueFailure()
         return
     end if
     if result.queue = invalid then
         m.statusLabel.text = "Fetch failed: missing queue field in response."
+        noteQueueFailure()
         return
     end if
 
+    m.queueFailureCount = 0
     m.queue = result.queue
 
     ' Build the LabelList content: a [Change Host] row at index 0, then
@@ -249,8 +290,22 @@ sub playIndex(idx as integer)
     m.videoPlayer.control = "play"
     m.videoPlayer.setFocus(true)
     m.statusLabel.text = "Playing: " + entry.title
+    m.progressBarFill.width = 0
+    m.progressTimeLabel.text = "0:00 / 0:00"
+    m.progressGroup.visible = true
     reportEvent("playback_started")
 end sub
+
+function formatTimeSec(sec as float) as string
+    if sec < 0 then sec = 0
+    total = Int(sec)
+    mm = total \ 60
+    ss = total mod 60
+    if ss < 10 then
+        return mm.toStr() + ":0" + ss.toStr()
+    end if
+    return mm.toStr() + ":" + ss.toStr()
+end function
 
 function buildCutsState(entry as object) as object
     state = {
@@ -297,6 +352,16 @@ end function
 sub onVideoPosition()
     if m.cutsState = invalid then return
     pos = m.videoPlayer.position
+
+    ' Drive on-TV progress bar whenever position updates
+    dur = m.videoPlayer.duration
+    if dur > 0 then
+        pct = pos / dur
+        if pct < 0 then pct = 0
+        if pct > 1 then pct = 1
+        m.progressBarFill.width = Int(1800 * pct)
+        m.progressTimeLabel.text = formatTimeSec(pos) + " / " + formatTimeSec(dur)
+    end if
 
     if m.cutsState.queueEndTime > 0 and not m.cutsState.queueEndTriggered then
         if pos >= m.cutsState.queueEndTime then
@@ -384,6 +449,7 @@ sub advanceQueue()
     else
         m.videoPlayer.control = "stop"
         m.videoPlayer.visible = false
+        m.progressGroup.visible = false
         m.statusLabel.text = "Queue complete."
         m.queueList.setFocus(true)
         reportEvent("queue_complete")
@@ -407,8 +473,15 @@ end sub
 
 sub onCommandsFetched()
     result = m.cmdTask.result
-    if result = invalid then return
-    if result.error <> invalid and result.error <> "" then return
+    if result = invalid then
+        noteCommandFailure()
+        return
+    end if
+    if result.error <> invalid and result.error <> "" then
+        noteCommandFailure()
+        return
+    end if
+    m.commandFailureCount = 0
     if result.commands <> invalid and result.commands.count() > 0 then
         for each c in result.commands
             dispatchCommand(c)

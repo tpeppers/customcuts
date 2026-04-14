@@ -104,12 +104,20 @@ Referer / User-Agent / cookie requirements.
 - `[Change Host]` row at the top of the Roku queue list
 - Duration reporting in events + progress bar in the Now-Playing panel
 
-## Not yet (Phase 4+)
-
-- Shared-secret auth header
-- Splash / icon images
-- Progress bar shown on the Roku itself (currently extension-side only)
-- Automatic re-discovery if the stored host URL becomes unreachable
+**Phase 4**
+- Shared-secret auth (`X-CC-Auth` header / `?tok=` query). Token is
+  generated on first run of the native host and persisted to
+  `native_host/customcuts_host.token`. LAN discovery delivers it
+  automatically (`CC!http://ip:port|<token>`); manual on-TV setup takes
+  `ip:port|token` in a single keyboard dialog. Rotate via the extension's
+  Cast panel.
+- Splash + icon images wired into the manifest. Regenerate anytime with
+  `python customcuts-roku/generate_assets.py` — stdlib-only, no Pillow.
+- On-Roku progress bar + time readout shown below the video during
+  playback (independent of the extension-side Now-Playing panel).
+- Auto re-discovery: if 3 consecutive queue fetches or ~10s of command
+  polling fail, the channel drops the stored host + token and re-broadcasts
+  `CC?` before falling back to the manual keyboard dialog.
 
 ## Troubleshooting
 
