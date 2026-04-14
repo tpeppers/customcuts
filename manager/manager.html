@@ -132,6 +132,67 @@
           <p class="empty-state">No live generated playlists yet.</p>
         </section>
       </section>
+
+      <!-- Roku / Cast hosting panel -->
+      <section class="roku-cast-section">
+        <h3>Cast to Roku TV</h3>
+        <p class="section-description">
+          Run a local HTTP server that a sideloaded Roku channel can stream the current
+          video queue from. Requires the stream host to be installed
+          (<code>native_host/install_stream_host.py</code>) and <code>yt-dlp</code> in the
+          <code>customcuts</code> conda env.
+        </p>
+        <div class="roku-cast-controls">
+          <div class="roku-row">
+            <label for="roku-port">Port:</label>
+            <input type="number" id="roku-port" value="8787" min="1024" max="65535">
+            <label class="roku-inline-label">
+              <input type="checkbox" id="roku-lan" checked>
+              <span>LAN-accessible (0.0.0.0)</span>
+            </label>
+          </div>
+          <div class="roku-row">
+            <button id="roku-start-btn" class="btn btn-primary">Start Hosting</button>
+            <button id="roku-stop-btn" class="btn btn-secondary" disabled>Stop Hosting</button>
+            <button id="roku-push-btn" class="btn btn-secondary" disabled>Push Current Queue</button>
+          </div>
+          <div class="roku-status-display">
+            <div>Status: <span id="roku-status-text">Not hosting</span></div>
+            <div id="roku-urls" class="hidden">
+              <div>Health: <code id="roku-health-url"></code></div>
+              <div>Queue JSON: <code id="roku-queue-url"></code></div>
+              <div class="roku-hint">First sideload: set the Roku's host via the on-TV keyboard dialog (Phase 2) or edit <code>m.hostUrl</code> in <code>customcuts-roku/components/HomeScene.brs</code>.</div>
+            </div>
+          </div>
+          <div class="roku-row">
+            <label class="roku-inline-label">
+              <input type="checkbox" id="roku-forward-keys">
+              <span>Forward keyboard shortcuts to Roku (Alt+Shift+arrows/N/1/5/V/D)</span>
+            </label>
+          </div>
+          <div class="roku-now-playing hidden" id="roku-now-playing">
+            <div class="roku-np-line"><strong>Now playing on Roku:</strong> <span id="roku-np-title">—</span></div>
+            <div class="roku-progress-bar">
+              <div class="roku-progress-fill" id="roku-np-progress-fill"></div>
+            </div>
+            <div class="roku-np-meta">
+              <span>Index: <span id="roku-np-index">—</span></span>
+              <span>Position: <span id="roku-np-position">—</span></span>
+              <span>State: <span id="roku-np-state">—</span></span>
+            </div>
+          </div>
+          <div class="roku-remote" id="roku-remote">
+            <button class="btn btn-secondary roku-remote-btn" data-cmd="prev">&laquo; Prev</button>
+            <button class="btn btn-secondary roku-remote-btn" data-cmd="rewind-small">&laquo; Rewind</button>
+            <button class="btn btn-secondary roku-remote-btn" data-cmd="pause">Pause</button>
+            <button class="btn btn-secondary roku-remote-btn" data-cmd="resume">Play</button>
+            <button class="btn btn-secondary roku-remote-btn" data-cmd="fast-forward-small">FF &raquo;</button>
+            <button class="btn btn-secondary roku-remote-btn" data-cmd="fast-forward-large">FF Large &raquo;</button>
+            <button class="btn btn-secondary roku-remote-btn" data-cmd="next">Next &raquo;</button>
+            <button class="btn btn-secondary roku-remote-btn" data-cmd="stop">Stop</button>
+          </div>
+        </div>
+      </section>
     </div>
 
     <!-- Bookmarks Tab -->

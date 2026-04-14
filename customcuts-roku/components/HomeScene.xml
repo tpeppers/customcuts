@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="HomeScene" extends="Scene">
+    <script type="text/brightscript" uri="HomeScene.brs" />
+    <children>
+        <LayoutGroup id="mainLayout" layoutDirection="vert" translation="[60, 60]" itemSpacings="[12]">
+            <Label id="titleLabel" text="CustomCuts Stream" font="font:LargeBoldSystemFont" color="0xFFFFFFFF" />
+            <Label id="statusLabel" text="Connecting..." font="font:MediumSystemFont" color="0xCCCCCCFF" width="1800" />
+            <LabelList id="queueList" itemSize="[1200, 56]" numRows="10" visible="false" />
+        </LayoutGroup>
+        <Video id="videoPlayer" visible="false" width="1920" height="1080" translation="[0, 0]" />
+        <QueueTask id="queueTask" />
+        <CommandTask id="cmdTask" />
+        <EventTask id="eventTask" />
+        <DiscoveryTask id="discoveryTask" />
+        <Timer id="cmdTimer" duration="1" repeat="true" />
+        <Timer id="eventTimer" duration="2" repeat="true" />
+    </children>
+</component>

@@ -3040,6 +3040,186 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderPacks();
   });
 
+  // ============================================================================
+  // Roku streaming host controls
+  // ============================================================================
+  const rokuStartBtn = document.getElementById('roku-start-btn');
+  const rokuStopBtn = document.getElementById('roku-stop-btn');
+  const rokuPushBtn = document.getElementById('roku-push-btn');
+  const rokuPortInput = document.getElementById('roku-port');
+  const rokuLanCheckbox = document.getElementById('roku-lan');
+  const rokuStatusText = document.getElementById('roku-status-text');
+  const rokuUrls = document.getElementById('roku-urls');
+  const rokuHealthUrl = document.getElementById('roku-health-url');
+  const rokuQueueUrl = document.getElementById('roku-queue-url');
+  const rokuForwardKeysCheckbox = document.getElementById('roku-forward-keys');
+  const rokuNowPlaying = document.getElementById('roku-now-playing');
+  const rokuNpTitle = document.getElementById('roku-np-title');
+  const rokuNpIndex = document.getElementById('roku-np-index');
+  const rokuNpPosition = document.getElementById('roku-np-position');
+  const rokuNpState = document.getElementById('roku-np-state');
+  const rokuNpProgressFill = document.getElementById('roku-np-progress-fill');
+  const rokuRemoteButtons = document.querySelectorAll('.roku-remote-btn');
+
+  function formatPositionSec(p) {
+    if (p == null || isNaN(p)) return '—';
+    const s = Math.floor(p);
+    const mm = Math.floor(s / 60);
+    const ss = String(s % 60).padStart(2, '0');
+    return `${mm}:${ss}`;
+  }
+
+  function setRemoteEnabled(enabled) {
+    rokuRemoteButtons.forEach(b => { b.disabled = !enabled; });
+  }
+
+  function updateRokuUI(status) {
+    const hosting = !!status?.hosting;
+    rokuStartBtn.disabled = hosting;
+    rokuStopBtn.disabled = !hosting;
+    rokuPushBtn.disabled = !hosting;
+    setRemoteEnabled(hosting);
+    if (hosting) {
+      rokuStatusText.textContent = 'Hosting';
+      rokuStatusText.style.color = '#16a34a';
+      const lan = status.lan_ip || '127.0.0.1';
+      const port = status.port || rokuPortInput.value;
+      rokuHealthUrl.textContent = `http://${lan}:${port}/healthz`;
+      rokuQueueUrl.textContent = `http://${lan}:${port}/queue.json`;
+      rokuUrls.classList.remove('hidden');
+    } else {
+      rokuStatusText.textContent = 'Not hosting';
+      rokuStatusText.style.color = '';
+      rokuUrls.classList.add('hidden');
+      rokuNowPlaying.classList.add('hidden');
+    }
+  }
+
+  function updateNowPlaying(ev) {
+    if (!ev) {
+      rokuNowPlaying.classList.add('hidden');
+      return;
+    }
+    rokuNpTitle.textContent = ev.title || ev.url || '—';
+    rokuNpIndex.textContent = ev.index != null ? String(ev.index) : '—';
+    const posText = formatPositionSec(ev.position);
+    const durText = ev.duration != null && ev.duration > 0
+      ? formatPositionSec(ev.duration)
+      : null;
+    rokuNpPosition.textContent = durText ? `${posText} / ${durText}` : posText;
+    rokuNpState.textContent = ev.state || '—';
+    const pct = (ev.duration != null && ev.duration > 0 && ev.position != null)
+      ? Math.max(0, Math.min(100, (ev.position / ev.duration) * 100))
+      : 0;
+    rokuNpProgressFill.style.width = pct.toFixed(1) + '%';
+    rokuNowPlaying.classList.remove('hidden');
+  }
+
+  rokuStartBtn.addEventListener('click', async () => {
+    rokuStartBtn.disabled = true;
+    const port = parseInt(rokuPortInput.value, 10) || 8787;
+    const bindAddr = rokuLanCheckbox.checked ? '0.0.0.0' : '127.0.0.1';
+    try {
+      const resp = await chrome.runtime.sendMessage({
+        action: 'rokuStartHosting', port, bindAddr,
+      });
+      if (!resp || !resp.ok) {
+        alert('Failed to start hosting: ' + (resp?.error || 'unknown'));
+        updateRokuUI({ hosting: false });
+      } else {
+        updateRokuUI(resp);
+      }
+    } catch (e) {
+      alert('Error: ' + e.message);
+      updateRokuUI({ hosting: false });
+    }
+  });
+
+  rokuStopBtn.addEventListener('click', async () => {
+    try {
+      await chrome.runtime.sendMessage({ action: 'rokuStopHosting' });
+    } catch (e) {
+      console.error(e);
+    }
+    updateRokuUI({ hosting: false });
+  });
+
+  rokuPushBtn.addEventListener('click', async () => {
+    try {
+      const resp = await chrome.runtime.sendMessage({ action: 'rokuPushQueue' });
+      if (resp?.ok) {
+        alert(`Queue pushed: ${resp.count ?? 0} videos (version ${resp.version})`);
+      } else {
+        alert('Push failed: ' + (resp?.error || 'unknown'));
+      }
+    } catch (e) {
+      alert('Error: ' + e.message);
+    }
+  });
+
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg?.action !== 'rokuHostEvent') return;
+    const p = msg.payload;
+    if (!p) return;
+    if (p.type === 'hosting_started' && p.ok) {
+      updateRokuUI(p);
+    } else if (p.type === 'hosting_stopped') {
+      updateRokuUI({ hosting: false });
+    } else if (p.type === 'status') {
+      updateRokuUI(p);
+    } else if (p.type === 'roku_event') {
+      updateNowPlaying(p.event);
+    }
+  });
+
+  // Forward keyboard shortcuts to Roku toggle
+  rokuForwardKeysCheckbox.addEventListener('change', async () => {
+    await chrome.runtime.sendMessage({
+      action: 'rokuSetForwardKeys',
+      value: rokuForwardKeysCheckbox.checked,
+    });
+  });
+
+  // Remote control buttons
+  rokuRemoteButtons.forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const cmd = btn.dataset.cmd;
+      let commandName = cmd;
+      let args = {};
+      // Map UI buttons to the Roku command protocol
+      if (cmd === 'fast-forward-small') {
+        commandName = 'seek_delta';
+        args = { delta: 10 };
+      } else if (cmd === 'fast-forward-large') {
+        commandName = 'seek_delta';
+        args = { delta: 30 };
+      } else if (cmd === 'rewind-small') {
+        commandName = 'seek_delta';
+        args = { delta: -10 };
+      }
+      try {
+        await chrome.runtime.sendMessage({
+          action: 'rokuEnqueueCommand',
+          commandName,
+          args,
+        });
+      } catch (e) {
+        console.error('[roku remote]', e);
+      }
+    });
+  });
+
+  // Initialize status, forwarder state, and last event on load
+  chrome.runtime.sendMessage({ action: 'rokuGetStatus' }).then(resp => {
+    if (resp && !resp.error) updateRokuUI(resp);
+  }).catch(() => {});
+  chrome.runtime.sendMessage({ action: 'rokuGetForwardKeys' }).then(resp => {
+    if (resp?.ok) rokuForwardKeysCheckbox.checked = !!resp.forwardKeys;
+  }).catch(() => {});
+  chrome.runtime.sendMessage({ action: 'rokuGetLastEvent' }).then(resp => {
+    if (resp?.ok && resp.event) updateNowPlaying(resp.event);
+  }).catch(() => {});
+
   // Initial load
   loadAllVideos();
 });

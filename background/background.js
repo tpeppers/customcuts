@@ -1,3 +1,5 @@
+import * as rokuHost from './roku-host.js';
+
 const DEFAULT_SETTINGS = {
   fastForwardSmall: 10,
   fastForwardLarge: 30,
@@ -689,6 +691,39 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       break;
 
+    // Roku streaming host controls (background/roku-host.js)
+    case 'rokuStartHosting':
+      rokuHost.startHosting(message.port, message.bindAddr).then(sendResponse);
+      return true;
+
+    case 'rokuStopHosting':
+      rokuHost.stopHosting().then(sendResponse);
+      return true;
+
+    case 'rokuGetStatus':
+      rokuHost.getStatus().then(sendResponse);
+      return true;
+
+    case 'rokuPushQueue':
+      rokuHost.pushCurrentQueue().then(sendResponse);
+      return true;
+
+    case 'rokuEnqueueCommand':
+      rokuHost.enqueueCommand(message.commandName, message.args || {}).then(sendResponse);
+      return true;
+
+    case 'rokuSetForwardKeys':
+      sendResponse(rokuHost.setForwardKeys(!!message.value));
+      return true;
+
+    case 'rokuGetForwardKeys':
+      sendResponse({ ok: true, forwardKeys: rokuHost.getForwardKeys() });
+      return true;
+
+    case 'rokuGetLastEvent':
+      sendResponse({ ok: true, event: rokuHost.getLastEvent() });
+      return true;
+
     case 'getSettings':
       getSettings().then(settings => sendResponse(settings));
       return true;
@@ -1006,6 +1041,13 @@ async function addQuicktagToCurrentVideo(tagName) {
 
 chrome.commands.onCommand.addListener(async (command) => {
   const settings = await getSettings();
+
+  // Phase 2: forward keyboard commands to the Roku host instead of the
+  // active Chrome tab when the user has enabled forwarding.
+  if (rokuHost.isHostingAndForwarding()) {
+    const handled = await rokuHost.handleCommandForRoku(command, settings);
+    if (handled) return;
+  }
 
   switch (command) {
     case 'close-tab':

@@ -44,23 +44,11 @@
   ],
   "options_page": "options/options.html",
   "commands": {
-    "close-tab": {
-      "suggested_key": {
-        "default": "Alt+Shift+C"
-      },
-      "description": "Close current tab"
-    },
     "fast-forward-small": {
       "suggested_key": {
         "default": "Alt+Shift+Right"
       },
       "description": "Fast forward video (small skip)"
-    },
-    "fast-forward-large": {
-      "suggested_key": {
-        "default": "Alt+Shift+L"
-      },
-      "description": "Fast forward video (large skip)"
     },
     "rewind-small": {
       "suggested_key": {
@@ -80,23 +68,20 @@
       },
       "description": "Remove currently playing video from queue"
     },
+    "close-tab": {
+      "description": "Close current tab (unbound by default — set at chrome://extensions/shortcuts)"
+    },
+    "fast-forward-large": {
+      "description": "Fast forward video (large skip) (unbound by default — set at chrome://extensions/shortcuts)"
+    },
     "rate-p1-one-star": {
-      "suggested_key": {
-        "default": "Alt+Shift+1"
-      },
-      "description": "Rate current video: P1 = 1 star"
+      "description": "Rate current video: P1 = 1 star (unbound by default — set at chrome://extensions/shortcuts)"
     },
     "rate-p1-five-stars": {
-      "suggested_key": {
-        "default": "Alt+Shift+5"
-      },
-      "description": "Rate current video: P1 = 5 stars"
+      "description": "Rate current video: P1 = 5 stars (unbound by default — set at chrome://extensions/shortcuts)"
     },
     "quicktag-review": {
-      "suggested_key": {
-        "default": "Alt+Shift+V"
-      },
-      "description": "Add REVIEW quicktag to current video"
+      "description": "Add REVIEW quicktag to current video (unbound by default — set at chrome://extensions/shortcuts)"
     }
   }
 }

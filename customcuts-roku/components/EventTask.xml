@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="EventTask" extends="Task">
+    <script type="text/brightscript" uri="EventTask.brs" />
+    <interface>
+        <field id="hostUrl" type="string" />
+        <field id="event" type="assocarray" />
+        <field id="sent" type="boolean" value="false" />
+    </interface>
+</component>

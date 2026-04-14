@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="CommandTask" extends="Task">
+    <script type="text/brightscript" uri="CommandTask.brs" />
+    <interface>
+        <field id="hostUrl" type="string" />
+        <field id="sinceSeq" type="integer" value="0" />
+        <field id="result" type="assocarray" />
+    </interface>
+</component>
