@@ -3,6 +3,7 @@
     <script type="text/brightscript" uri="QueueTask.brs" />
     <interface>
         <field id="hostUrl" type="string" />
+        <field id="authToken" type="string" value="" />
         <field id="result" type="assocarray" />
     </interface>
 </component>

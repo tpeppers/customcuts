@@ -10,6 +10,7 @@ end sub
 sub doDiscover()
     m.top.done = false
     m.top.result = ""
+    m.top.authToken = ""
 
     sock = CreateObject("roDatagramSocket")
     if sock = invalid then
@@ -49,7 +50,15 @@ sub doDiscover()
             reply = sock.receiveStr(1024)
             if reply <> invalid and len(reply) >= 4 then
                 if left(reply, 3) = "CC!" then
-                    m.top.result = mid(reply, 4)
+                    payload = mid(reply, 4)
+                    ' Phase 4: CC!http://ip:port|<token>
+                    pipe = Instr(1, payload, "|")
+                    if pipe > 0 then
+                        m.top.authToken = mid(payload, pipe + 1)
+                        m.top.result = left(payload, pipe - 1)
+                    else
+                        m.top.result = payload
+                    end if
                     sock.close()
                     m.top.done = true
                     return

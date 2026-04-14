@@ -3,6 +3,7 @@
     <script type="text/brightscript" uri="EventTask.brs" />
     <interface>
         <field id="hostUrl" type="string" />
+        <field id="authToken" type="string" value="" />
         <field id="event" type="assocarray" />
         <field id="sent" type="boolean" value="false" />
     </interface>

@@ -2088,6 +2088,23 @@ h3 {
   font-style: italic;
 }
 
+.roku-auth-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.roku-auth-row code {
+  font-family: 'Courier New', monospace;
+  background: #e9ecef;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  user-select: all;
+}
+
 .roku-now-playing {
   padding: 12px;
   background: #0f172a;

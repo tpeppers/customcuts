@@ -724,6 +724,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: true, event: rokuHost.getLastEvent() });
       return true;
 
+    case 'rokuRotateAuthToken':
+      rokuHost.rotateAuthToken().then(sendResponse);
+      return true;
+
     case 'getSettings':
       getSettings().then(settings => sendResponse(settings));
       return true;

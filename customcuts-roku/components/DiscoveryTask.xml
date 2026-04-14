@@ -4,6 +4,7 @@
     <interface>
         <field id="timeoutMs" type="integer" value="3000" />
         <field id="result" type="string" value="" />
+        <field id="authToken" type="string" value="" />
         <field id="done" type="boolean" value="false" />
     </interface>
 </component>

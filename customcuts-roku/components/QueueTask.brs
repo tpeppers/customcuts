@@ -14,6 +14,9 @@ sub doFetch()
     req.initClientCertificates()
     req.retainBodyOnError(true)
     req.addHeader("Accept", "application/json")
+    if m.top.authToken <> invalid and m.top.authToken <> "" then
+        req.addHeader("X-CC-Auth", m.top.authToken)
+    end if
 
     body = req.getToString()
 

@@ -3052,6 +3052,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const rokuUrls = document.getElementById('roku-urls');
   const rokuHealthUrl = document.getElementById('roku-health-url');
   const rokuQueueUrl = document.getElementById('roku-queue-url');
+  const rokuAuthToken = document.getElementById('roku-auth-token');
+  const rokuCopyHostToken = document.getElementById('roku-copy-host-token');
+  const rokuRotateToken = document.getElementById('roku-rotate-token');
   const rokuForwardKeysCheckbox = document.getElementById('roku-forward-keys');
   const rokuNowPlaying = document.getElementById('roku-now-playing');
   const rokuNpTitle = document.getElementById('roku-np-title');
@@ -3073,6 +3076,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     rokuRemoteButtons.forEach(b => { b.disabled = !enabled; });
   }
 
+  let currentHostLan = null;
+  let currentHostPort = null;
+  let currentAuthToken = null;
+
   function updateRokuUI(status) {
     const hosting = !!status?.hosting;
     rokuStartBtn.disabled = hosting;
@@ -3086,12 +3093,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       const port = status.port || rokuPortInput.value;
       rokuHealthUrl.textContent = `http://${lan}:${port}/healthz`;
       rokuQueueUrl.textContent = `http://${lan}:${port}/queue.json`;
+      if (status.auth_token) currentAuthToken = status.auth_token;
+      currentHostLan = lan;
+      currentHostPort = port;
+      rokuAuthToken.textContent = currentAuthToken
+        ? currentAuthToken
+        : '(unknown)';
       rokuUrls.classList.remove('hidden');
     } else {
       rokuStatusText.textContent = 'Not hosting';
       rokuStatusText.style.color = '';
       rokuUrls.classList.add('hidden');
       rokuNowPlaying.classList.add('hidden');
+      currentHostLan = null;
+      currentHostPort = null;
     }
   }
 
@@ -3169,6 +3184,34 @@ document.addEventListener('DOMContentLoaded', async () => {
       updateRokuUI(p);
     } else if (p.type === 'roku_event') {
       updateNowPlaying(p.event);
+    }
+  });
+
+  rokuCopyHostToken.addEventListener('click', async () => {
+    if (!currentHostLan || !currentHostPort || !currentAuthToken) return;
+    const entry = `${currentHostLan}:${currentHostPort}|${currentAuthToken}`;
+    try {
+      await navigator.clipboard.writeText(entry);
+      const prev = rokuCopyHostToken.textContent;
+      rokuCopyHostToken.textContent = 'Copied!';
+      setTimeout(() => { rokuCopyHostToken.textContent = prev; }, 1500);
+    } catch (e) {
+      alert('Copy failed: ' + e.message);
+    }
+  });
+
+  rokuRotateToken.addEventListener('click', async () => {
+    if (!confirm('Rotate the auth token? The Roku will need the new token (via LAN re-discovery or manual paste) before it can talk to the host again.')) return;
+    try {
+      const resp = await chrome.runtime.sendMessage({ action: 'rokuRotateAuthToken' });
+      if (resp?.ok && resp.auth_token) {
+        currentAuthToken = resp.auth_token;
+        rokuAuthToken.textContent = currentAuthToken;
+      } else {
+        alert('Rotate failed: ' + (resp?.error || 'unknown'));
+      }
+    } catch (e) {
+      alert('Error: ' + e.message);
     }
   });
 

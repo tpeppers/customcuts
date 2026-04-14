@@ -5,5 +5,8 @@ __pycache__/
 # Logs
 *.log
 
+# Native host shared secret (auto-generated per install)
+native_host/customcuts_host.token
+
 # Claude Code local settings
 .claude/settings.local.json

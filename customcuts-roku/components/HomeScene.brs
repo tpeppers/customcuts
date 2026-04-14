@@ -30,6 +30,9 @@ sub init()
     m.hostDialog = invalid
     m.lastReportedState = ""
     m.hostUrl = ""
+    m.authToken = ""
+    m.queueFailureCount = 0
+    m.commandFailureCount = 0
 
     m.queueList.observeField("itemSelected", "onQueueItemSelected")
     m.videoPlayer.observeField("state", "onVideoState")
@@ -43,6 +46,7 @@ sub init()
     m.top.setFocus(true)
 
     m.hostUrl = loadHostUrl()
+    m.authToken = loadAuthToken()
     if m.hostUrl = "" then
         runDiscovery()
     else
@@ -65,7 +69,14 @@ sub onDiscoveryDone()
     if found <> invalid and found <> "" then
         saveHostUrl(found)
         m.hostUrl = found
+        tok = m.discoveryTask.authToken
+        if tok <> invalid and tok <> "" then
+            m.authToken = tok
+            saveAuthToken(tok)
+        end if
         m.statusLabel.text = "Host discovered: " + found
+        m.queueFailureCount = 0
+        m.commandFailureCount = 0
         startPollers()
         fetchQueue()
     else
@@ -74,7 +85,7 @@ sub onDiscoveryDone()
     end if
 end sub
 
-' Host URL persistence ----------------------------------------------------
+' Host URL + auth token persistence ---------------------------------------
 function loadHostUrl() as string
     reg = CreateObject("roRegistrySection", "CustomCuts")
     if reg.Exists("hostUrl") then return reg.Read("hostUrl")
@@ -87,10 +98,22 @@ sub saveHostUrl(url as string)
     reg.Flush()
 end sub
 
+function loadAuthToken() as string
+    reg = CreateObject("roRegistrySection", "CustomCuts")
+    if reg.Exists("authToken") then return reg.Read("authToken")
+    return ""
+end function
+
+sub saveAuthToken(tok as string)
+    reg = CreateObject("roRegistrySection", "CustomCuts")
+    reg.Write("authToken", tok)
+    reg.Flush()
+end sub
+
 sub showHostSetup(initialText as string)
     kbd = CreateObject("roSGNode", "KeyboardDialog")
     kbd.title = "CustomCuts Host"
-    kbd.message = "Enter host address (IP:PORT, e.g. 192.168.1.42:8787)"
+    kbd.message = "IP:PORT|TOKEN (e.g. 192.168.1.42:8787|abc123). Paste from extension Cast panel."
     kbd.text = initialText
     kbd.buttons = ["Connect", "Cancel"]
     kbd.observeField("buttonSelected", "onHostDialogButton")
@@ -102,12 +125,18 @@ sub onHostDialogButton()
     idx = m.hostDialog.buttonSelected
     if idx = 0 then
         raw = m.hostDialog.text
-        url = normalizeHostUrl(raw)
-        saveHostUrl(url)
-        m.hostUrl = url
+        parsed = parseHostEntry(raw)
+        saveHostUrl(parsed.url)
+        m.hostUrl = parsed.url
+        if parsed.token <> "" then
+            m.authToken = parsed.token
+            saveAuthToken(parsed.token)
+        end if
         m.top.dialog = invalid
         m.hostDialog = invalid
-        m.statusLabel.text = "Host saved: " + url
+        m.statusLabel.text = "Host saved: " + parsed.url
+        m.queueFailureCount = 0
+        m.commandFailureCount = 0
         startPollers()
         fetchQueue()
     else
@@ -117,7 +146,7 @@ sub onHostDialogButton()
     end if
 end sub
 
-function normalizeHostUrl(raw as string) as string
+function parseHostEntry(raw as string) as object
     s = raw
     while len(s) > 0 and (right(s, 1) = " " or right(s, 1) = chr(9))
         s = left(s, len(s) - 1)
@@ -125,9 +154,16 @@ function normalizeHostUrl(raw as string) as string
     while len(s) > 0 and (left(s, 1) = " " or left(s, 1) = chr(9))
         s = mid(s, 2)
     end while
-    if lCase(left(s, 7)) = "http://" then return s
-    if lCase(left(s, 8)) = "https://" then return s
-    return "http://" + s
+    token = ""
+    pipe = Instr(1, s, "|")
+    if pipe > 0 then
+        token = mid(s, pipe + 1)
+        s = left(s, pipe - 1)
+    end if
+    if lCase(left(s, 7)) <> "http://" and lCase(left(s, 8)) <> "https://" then
+        s = "http://" + s
+    end if
+    return { url: s, token: token }
 end function
 
 ' Queue fetching + list ---------------------------------------------------
@@ -139,6 +175,7 @@ end sub
 sub fetchQueue()
     m.statusLabel.text = "Fetching queue from " + m.hostUrl + "..."
     m.queueTask.hostUrl = m.hostUrl
+    m.queueTask.authToken = m.authToken
     m.queueTask.control = "RUN"
 end sub
 
@@ -363,6 +400,7 @@ end sub
 sub onCmdTimer()
     if m.hostUrl = invalid or m.hostUrl = "" then return
     m.cmdTask.hostUrl = m.hostUrl
+    m.cmdTask.authToken = m.authToken
     m.cmdTask.sinceSeq = m.commandSeq
     m.cmdTask.control = "RUN"
 end sub
@@ -439,6 +477,7 @@ sub reportEvent(eventType as string)
         state: m.videoPlayer.state
     }
     m.eventTask.hostUrl = m.hostUrl
+    m.eventTask.authToken = m.authToken
     m.eventTask.event = ev
     m.eventTask.control = "RUN"
 end sub

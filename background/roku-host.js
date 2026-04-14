@@ -18,6 +18,7 @@ let lastStatus = {
   port: null,
   bind: null,
   lan_ip: null,
+  auth_token: null,
 };
 
 // Phase 2: remote-control state
@@ -53,11 +54,13 @@ function handleHostMessage(msg) {
 
   if (msg?.type === 'hello') {
     lastStatus.lan_ip = msg.lan_ip || lastStatus.lan_ip;
+    if (msg.auth_token) lastStatus.auth_token = msg.auth_token;
   } else if (msg?.type === 'hosting_started' && msg.ok) {
     lastStatus.hosting = true;
     lastStatus.port = msg.port;
     lastStatus.bind = msg.bind;
     lastStatus.lan_ip = msg.lan_ip || lastStatus.lan_ip;
+    if (msg.auth_token) lastStatus.auth_token = msg.auth_token;
   } else if (msg?.type === 'hosting_stopped') {
     lastStatus.hosting = false;
     lastStatus.port = null;
@@ -67,6 +70,9 @@ function handleHostMessage(msg) {
     lastStatus.port = msg.port;
     lastStatus.bind = msg.bind;
     lastStatus.lan_ip = msg.lan_ip || lastStatus.lan_ip;
+    if (msg.auth_token) lastStatus.auth_token = msg.auth_token;
+  } else if (msg?.type === 'token_rotated') {
+    if (msg.auth_token) lastStatus.auth_token = msg.auth_token;
   } else if (msg?.type === 'roku_event') {
     // Event posted by the Roku channel, relayed through the Python host.
     // msg.event shape: { type, index, url, title, position, state }
@@ -232,6 +238,11 @@ export async function getStatus() {
     return { ok: true, hosting: false, ...lastStatus };
   }
   return sendCommand({ cmd: 'get_status' }, 'status');
+}
+
+export async function rotateAuthToken() {
+  const resp = await sendCommand({ cmd: 'rotate_token' }, 'token_rotated');
+  return resp;
 }
 
 export async function pushCurrentQueue() {

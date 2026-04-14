@@ -161,7 +161,13 @@
             <div id="roku-urls" class="hidden">
               <div>Health: <code id="roku-health-url"></code></div>
               <div>Queue JSON: <code id="roku-queue-url"></code></div>
-              <div class="roku-hint">First sideload: set the Roku's host via the on-TV keyboard dialog (Phase 2) or edit <code>m.hostUrl</code> in <code>customcuts-roku/components/HomeScene.brs</code>.</div>
+              <div class="roku-auth-row">
+                <span>Auth token:</span>
+                <code id="roku-auth-token">—</code>
+                <button id="roku-copy-host-token" class="btn btn-secondary">Copy host|token</button>
+                <button id="roku-rotate-token" class="btn btn-secondary">Rotate</button>
+              </div>
+              <div class="roku-hint">LAN auto-discovery pushes the token to the Roku automatically. For manual setup, paste <code>host|token</code> into the on-TV keyboard dialog.</div>
             </div>
           </div>
           <div class="roku-row">

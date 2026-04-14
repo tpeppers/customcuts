@@ -16,6 +16,7 @@ queue and stream media.
 import sys
 import os
 import json
+import secrets
 import struct
 import threading
 import socket
@@ -35,8 +36,14 @@ if sys.platform == 'win32':
 # Logging -----------------------------------------------------------------
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(_SCRIPT_DIR, 'customcuts_host.log')
+TOKEN_FILE = os.path.join(_SCRIPT_DIR, 'customcuts_host.token')
 LOG_LEVEL = 2  # 0=ERROR 1=WARN 2=INFO 3=DEBUG
 _log_lock = threading.Lock()
+
+# Phase 4: shared-secret auth. A 32-char hex token is generated on first run
+# and persisted next to the script. LAN discovery replies include it so the
+# Roku can auto-authenticate; manual host entry accepts host|token format.
+_auth_token = None
 
 
 def log(msg, level=2):
@@ -98,6 +105,45 @@ _DISCOVERY_PORT = 8788
 _discovery_sock = None
 _discovery_thread = None
 _discovery_stop = threading.Event()
+
+
+def load_or_generate_token():
+    """Load the persisted auth token, or create one on first run."""
+    global _auth_token
+    if _auth_token is not None:
+        return _auth_token
+    try:
+        if os.path.exists(TOKEN_FILE):
+            with open(TOKEN_FILE, 'r', encoding='utf-8') as f:
+                tok = f.read().strip()
+            if tok:
+                _auth_token = tok
+                log(f'auth: loaded existing token ({len(tok)} chars)', 2)
+                return tok
+    except Exception as ex:
+        log(f'auth: token read failed: {ex}', 1)
+    tok = secrets.token_hex(16)
+    try:
+        with open(TOKEN_FILE, 'w', encoding='utf-8') as f:
+            f.write(tok)
+        if sys.platform != 'win32':
+            os.chmod(TOKEN_FILE, 0o600)
+        log(f'auth: generated new token at {TOKEN_FILE}', 2)
+    except Exception as ex:
+        log(f'auth: token write failed: {ex}', 0)
+    _auth_token = tok
+    return tok
+
+
+def rotate_token():
+    global _auth_token
+    _auth_token = secrets.token_hex(16)
+    try:
+        with open(TOKEN_FILE, 'w', encoding='utf-8') as f:
+            f.write(_auth_token)
+    except Exception as ex:
+        log(f'auth: token rotate write failed: {ex}', 0)
+    return {'type': 'token_rotated', 'ok': True, 'auth_token': _auth_token}
 
 
 def get_lan_ip():
@@ -204,7 +250,8 @@ def _discovery_serve(http_port):
             continue
         if text.startswith('CC?'):
             lan = get_lan_ip()
-            reply = f'CC!http://{lan}:{http_port}'.encode('utf-8')
+            tok = _auth_token or ''
+            reply = f'CC!http://{lan}:{http_port}|{tok}'.encode('utf-8')
             try:
                 sock.sendto(reply, addr)
                 log(f'discovery: reply -> {addr[0]}:{addr[1]} {reply!r}', 3)
@@ -295,6 +342,29 @@ class CCHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _check_auth(self, plain=False):
+        """Verify auth via X-CC-Auth header OR ?tok=<token> query param.
+        The query-string path exists so the Roku <Video> node can authenticate
+        /media/<id> without the ability to set custom headers.
+        plain=True uses send_error for /media streams where _json would be wrong."""
+        if not _auth_token:
+            return True
+        provided = self.headers.get('X-CC-Auth') or ''
+        if provided != _auth_token:
+            qs = urlparse(self.path).query
+            for pair in qs.split('&'):
+                if pair.startswith('tok='):
+                    provided = pair[len('tok='):]
+                    break
+        if provided == _auth_token:
+            return True
+        log(f'auth: rejected {self.path} from {self.address_string()}', 1)
+        if plain:
+            self.send_error(401, 'unauthorized')
+        else:
+            self._json(401, {'error': 'unauthorized'})
+        return False
+
     def _find_entry(self, entry_id):
         with _state_lock:
             for e in _queue_state['queue']:
@@ -313,6 +383,7 @@ class CCHandler(BaseHTTPRequestHandler):
                 return
 
             if path == '/commands':
+                if not self._check_auth(): return
                 qs = urlparse(self.path).query
                 since = 0
                 for pair in qs.split('&'):
@@ -330,19 +401,24 @@ class CCHandler(BaseHTTPRequestHandler):
                 return
 
             if path == '/queue.json':
+                if not self._check_auth(): return
                 with _state_lock:
                     q = {
                         'version': _queue_state['version'],
                         'queue': [dict(e) for e in _queue_state['queue']],
                     }
-                # Rewrite each entry to expose a proxy play_url
+                # Rewrite each entry to expose a proxy play_url with the
+                # auth token embedded so the Roku Video node (which can't
+                # attach custom headers) stays authenticated.
                 host = self.headers.get('Host') or f'{_server_bind}:{_server_port}'
+                tok = _auth_token or ''
                 for e in q['queue']:
-                    e['play_url'] = f'http://{host}/media/{e["id"]}'
+                    e['play_url'] = f'http://{host}/media/{e["id"]}?tok={tok}'
                 self._json(200, q)
                 return
 
             if path.startswith('/resolve/'):
+                if not self._check_auth(): return
                 entry_id = path[len('/resolve/'):]
                 entry = self._find_entry(entry_id)
                 if not entry:
@@ -361,6 +437,7 @@ class CCHandler(BaseHTTPRequestHandler):
                 return
 
             if path.startswith('/media/'):
+                if not self._check_auth(plain=True): return
                 entry_id = path[len('/media/'):]
                 entry = self._find_entry(entry_id)
                 if not entry:
@@ -390,6 +467,7 @@ class CCHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
         if path == '/events':
+            if not self._check_auth(): return
             length = int(self.headers.get('Content-Length', '0'))
             body = self.rfile.read(length) if length else b''
             try:
@@ -482,6 +560,7 @@ def start_hosting(port=8787, bind='0.0.0.0'):
         'port': port, 'bind': bind, 'lan_ip': get_lan_ip(),
         'discovery': discovery_active,
         'discovery_port': _DISCOVERY_PORT if discovery_active else None,
+        'auth_token': _auth_token,
     }
 
 
@@ -552,16 +631,21 @@ def handle_command(msg):
             'lan_ip': get_lan_ip(),
             'queue_version': qv,
             'queue_count': qc,
+            'auth_token': _auth_token,
         }
+    if cmd == 'rotate_token':
+        return rotate_token()
     return {'type': 'error', 'error': f'unknown cmd: {cmd}'}
 
 
 def main():
     log('=== customcuts_host starting ===', 2)
+    load_or_generate_token()
     try:
         send_message({
             'type': 'hello', 'version': 1,
             'pid': os.getpid(), 'lan_ip': get_lan_ip(),
+            'auth_token': _auth_token,
         })
     except Exception as ex:
         log(f'initial send failed: {ex}', 0)
