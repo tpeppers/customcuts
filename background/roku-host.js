@@ -376,10 +376,10 @@ async function handleRemoteCommand(cmd, args) {
     return;
   }
   if (cmd === 'vote_skip_triggered') {
-    // Server says 2+ personas voted to skip. Add a VOTE-SKIPPED point
-    // tag at the reported position so the moment is preserved in the
-    // video's tag history. queue_remove_url has been relayed separately
-    // and handled above.
+    // Server says the vote-skip threshold was met. Add a VOTE-SKIPPED
+    // point tag at the reported position so the moment is preserved in
+    // the video's tag history. queue_remove_url has been relayed
+    // separately and handled above.
     const url = args?.url;
     const position = Number(args?.position) || 0;
     const voters = Array.isArray(args?.voters) ? args.voters : [];
@@ -397,6 +397,29 @@ async function handleRemoteCommand(cmd, args) {
     });
     await chrome.storage.local.set({ [videoId]: { ...vd, tags } });
     console.log('[roku-host] vote_skip_triggered:', url, 'at', position, 'by', voters);
+    return;
+  }
+  if (cmd === 'veto_triggered') {
+    // Single-persona unilateral skip. Tag as VETOED (distinct from
+    // VOTE-SKIPPED) so the tag-log can distinguish group-consensus
+    // skips from individual vetoes.
+    const url = args?.url;
+    const position = Number(args?.position) || 0;
+    const person = args?.person || '';
+    if (!url) return;
+    const videoId = 'video_' + url;
+    const data = await chrome.storage.local.get(videoId);
+    const vd = data[videoId] || {};
+    const tags = Array.isArray(vd.tags) ? [...vd.tags] : [];
+    tags.push({
+      name: 'VETOED',
+      startTime: position,
+      endTime: position,
+      createdAt: Date.now(),
+      vetoedBy: person,
+    });
+    await chrome.storage.local.set({ [videoId]: { ...vd, tags } });
+    console.log('[roku-host] veto_triggered:', url, 'at', position, 'by', person);
     return;
   }
 }

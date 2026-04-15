@@ -111,6 +111,9 @@ _last_event = None
 # a remove + advance. Votes are scoped to the currently-playing URL and
 # cleared whenever the playing URL changes. Threshold is settable via
 # native command from the extension Cast panel (1..4).
+# For an immediate unilateral skip that bypasses the vote tally, the
+# phone remote has a VETO button that POSTs cmd='veto' (handled
+# separately below — tags the video as VETOED, drops + advances).
 _vote_skip_threshold = 2
 _current_vote_url = None
 _current_votes = set()  # set of persona strings
@@ -829,6 +832,15 @@ class CCHandler(BaseHTTPRequestHandler):
                 self._json(200, resp)
                 return
 
+            # veto is an immediate unilateral skip — same downstream
+            # effect as a vote-skip at threshold 1, but written as a
+            # separate path so it can tag the video as VETOED instead
+            # of VOTE-SKIPPED and bypass the stale-URL/dedupe logic.
+            if cmd_name == 'veto':
+                resp = self._handle_veto(args)
+                self._json(200, resp)
+                return
+
             seq = enqueue_command_internal(cmd_name, args)
             # Commands that need the extension to manipulate chrome.storage
             # (load a saved playlist, drop a played video from videoQueue,
@@ -921,6 +933,56 @@ class CCHandler(BaseHTTPRequestHandler):
             'threshold': _vote_skip_threshold,
             'triggered': triggered,
         }
+
+    def _handle_veto(self, args):
+        """Immediate unilateral skip. Unlike vote_skip, there is no
+        quorum / dedupe — a single VETO fires the remove+advance chain
+        right away. Tags the video as VETOED (not VOTE-SKIPPED) so the
+        history can distinguish the two paths. Also clears any pending
+        vote-skip votes for the same URL, since the point is moot."""
+        global _current_vote_url, _current_votes
+        url = (args or {}).get('url')
+        person = (args or {}).get('person')
+        position = (args or {}).get('position') or 0
+        if not url or not person:
+            return {'ok': False, 'error': 'missing url or person'}
+
+        with _state_lock:
+            le_url = (_last_event or {}).get('url') if _last_event else None
+        if le_url and url != le_url:
+            log(f'veto: stale url {url} (current={le_url})', 1)
+            return {'ok': False, 'error': 'stale url', 'current_url': le_url}
+
+        with _state_lock:
+            if _current_vote_url == url:
+                _current_votes = set()
+                _current_vote_url = None
+
+        log(f'veto: {person} vetoed {url} at {position}s', 2)
+
+        try:
+            send_message({
+                'type': 'remote_command',
+                'cmd': 'veto_triggered',
+                'args': {
+                    'url': url,
+                    'position': position,
+                    'person': person,
+                },
+            })
+        except Exception as ex:
+            log(f'relay veto_triggered failed: {ex}', 1)
+        try:
+            send_message({
+                'type': 'remote_command',
+                'cmd': 'queue_remove_url',
+                'args': {'url': url},
+            })
+        except Exception as ex:
+            log(f'relay queue_remove_url failed: {ex}', 1)
+        enqueue_command_internal('next', {})
+
+        return {'ok': True, 'triggered': True, 'person': person}
 
     def _proxy_stream(self, url, headers, entry_id=None):
         """Stream url through to the client with Range support.

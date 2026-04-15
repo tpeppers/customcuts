@@ -3164,6 +3164,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Vote-skip threshold: persisted in chrome.storage.sync so it survives
   // reloads, pushed to the host on change, and re-sent after Start Hosting
   // so the fresh host process picks up the user's preferred threshold.
+  // Defaults to 2 — a single tap is the VETO button, not Vote-Skip.
   function clampThreshold(n) {
     n = parseInt(n, 10);
     if (!Number.isFinite(n)) return 2;

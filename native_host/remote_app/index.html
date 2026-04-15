@@ -82,6 +82,11 @@ body {
 .btn.primary { background: #fbbf24; color: #0f172a; }
 .btn.primary:active { background: #f59e0b; }
 .btn.danger { background: #7f1d1d; color: #fecaca; }
+.btn.veto {
+  background: #dc2626; color: #fff; font-weight: 800;
+  letter-spacing: 0.05em; text-transform: uppercase;
+}
+.btn.veto:active { background: #991b1b; }
 .btn.wide { grid-column: 1 / -1; }
 .btn.small { padding: 10px 6px; font-size: 14px; }
 .btn .sub { display: block; font-size: 11px; font-weight: 400; opacity: 0.7; margin-top: 2px; }
@@ -176,11 +181,11 @@ body {
     <button class="btn" data-cmd="next">Next &raquo;</button>
   </div>
   <div class="btn-row five">
-    <button class="btn small" data-cmd="rw-30">-30</button>
-    <button class="btn small" data-cmd="rw-10">-10</button>
-    <button class="btn small" data-cmd="rw-5">-5</button>
-    <button class="btn small" data-cmd="ff-10">+10</button>
-    <button class="btn small" data-cmd="ff-30">+30</button>
+    <button class="btn small" data-cmd="rw-30">-30m</button>
+    <button class="btn small" data-cmd="rw-10">-10m</button>
+    <button class="btn small" data-cmd="rw-5">-5m</button>
+    <button class="btn small" data-cmd="ff-10">+10m</button>
+    <button class="btn small" data-cmd="ff-30">+30m</button>
   </div>
   <div class="btn-row">
     <button class="btn small" data-cmd="refresh">Refresh queue</button>
@@ -189,6 +194,7 @@ body {
   </div>
   <div class="btn-row">
     <button class="btn small danger" data-cmd="vote-skip">Vote-Skip</button>
+    <button class="btn small veto" data-cmd="veto">Veto</button>
     <button class="btn small" data-cmd="disconnect">Forget host</button>
   </div>
   <div class="vote-status" id="vote-status"></div>
@@ -553,6 +559,27 @@ body {
     });
   }
 
+  function handleVeto() {
+    var url = currentUrl();
+    var person = currentPerson();
+    if (!url || !person) return;
+    var position = (lastEvent && lastEvent.position) || 0;
+    api('/commands', {
+      method: 'POST',
+      body: { cmd: 'veto', args: { url: url, person: person, position: position } },
+    }).then(function(resp){
+      if (!resp || resp.ok === false) {
+        voteStatusEl.textContent = 'Veto rejected: ' + ((resp && resp.error) || 'unknown');
+        voteStatusEl.classList.remove('triggered');
+        return;
+      }
+      voteStatusEl.textContent = 'Vetoed by ' + (resp.person || person);
+      voteStatusEl.classList.add('triggered');
+    }).catch(function(err){
+      voteStatusEl.textContent = 'Veto failed: ' + err.message;
+    });
+  }
+
   function handleCmd(cmd) {
     switch (cmd) {
       case 'prev': return sendCommand('prev');
@@ -562,12 +589,15 @@ body {
       case 'stop': return sendCommand('stop');
       case 'remove': return handleRemove();
       case 'vote-skip': return handleVoteSkip();
+      case 'veto': return handleVeto();
       case 'refresh': return sendCommand('refresh_queue');
-      case 'rw-30': return sendCommand('seek_delta', { delta: -30 });
-      case 'rw-10': return sendCommand('seek_delta', { delta: -10 });
-      case 'rw-5':  return sendCommand('seek_delta', { delta: -5 });
-      case 'ff-10': return sendCommand('seek_delta', { delta: 10 });
-      case 'ff-30': return sendCommand('seek_delta', { delta: 30 });
+      // Phone remote seek buttons step in MINUTES — player seek_delta is
+      // in seconds, so multiply by 60 on the way out.
+      case 'rw-30': return sendCommand('seek_delta', { delta: -30 * 60 });
+      case 'rw-10': return sendCommand('seek_delta', { delta: -10 * 60 });
+      case 'rw-5':  return sendCommand('seek_delta', { delta:  -5 * 60 });
+      case 'ff-10': return sendCommand('seek_delta', { delta:  10 * 60 });
+      case 'ff-30': return sendCommand('seek_delta', { delta:  30 * 60 });
       case 'disconnect':
         clearStored();
         cfg = null;
