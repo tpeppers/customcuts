@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon id="script.customcuts" name="CustomCuts" version="0.1.0" provider-name="CustomCuts">
+    <requires>
+        <import addon="xbmc.python" version="3.0.0"/>
+    </requires>
+    <extension point="xbmc.python.script" library="default.py">
+        <provides>executable</provides>
+    </extension>
+    <extension point="xbmc.addon.metadata">
+        <summary lang="en_GB">Play CustomCuts playlists via a local host</summary>
+        <description lang="en_GB">Discover a running CustomCuts streaming host on the LAN, browse saved playlists, and play them through Kodi. Supports the phone remote (start/stop/seek/next/prev) via the same /commands protocol as the Roku channel.</description>
+        <platform>all</platform>
+        <license>MIT</license>
+        <assets>
+            <icon>icon.png</icon>
+        </assets>
+    </extension>
+</addon>

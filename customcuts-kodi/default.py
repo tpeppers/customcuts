@@ -1,0 +1,5 @@
+"""CustomCuts Kodi addon entry point."""
+from resources.lib import main
+
+if __name__ == '__main__':
+    main.run()
