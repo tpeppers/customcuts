@@ -3047,6 +3047,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const rokuStopBtn = document.getElementById('roku-stop-btn');
   const rokuPushBtn = document.getElementById('roku-push-btn');
   const rokuPortInput = document.getElementById('roku-port');
+  const rokuVoteThresholdInput = document.getElementById('roku-vote-threshold');
   const rokuLanCheckbox = document.getElementById('roku-lan');
   const rokuStatusText = document.getElementById('roku-status-text');
   const rokuUrls = document.getElementById('roku-urls');
@@ -3160,6 +3161,43 @@ document.addEventListener('DOMContentLoaded', async () => {
     rokuNowPlaying.classList.remove('hidden');
   }
 
+  // Vote-skip threshold: persisted in chrome.storage.sync so it survives
+  // reloads, pushed to the host on change, and re-sent after Start Hosting
+  // so the fresh host process picks up the user's preferred threshold.
+  function clampThreshold(n) {
+    n = parseInt(n, 10);
+    if (!Number.isFinite(n)) return 2;
+    return Math.max(1, Math.min(4, n));
+  }
+  async function loadVoteSkipThreshold() {
+    try {
+      const data = await chrome.storage.sync.get('rokuVoteSkipThreshold');
+      const n = clampThreshold(data.rokuVoteSkipThreshold ?? 2);
+      rokuVoteThresholdInput.value = String(n);
+      return n;
+    } catch (e) {
+      return 2;
+    }
+  }
+  async function saveVoteSkipThreshold(n) {
+    try {
+      await chrome.storage.sync.set({ rokuVoteSkipThreshold: n });
+    } catch (e) { /* ignore */ }
+  }
+  async function pushVoteSkipThreshold(n) {
+    try {
+      await chrome.runtime.sendMessage({
+        action: 'rokuSetVoteSkipThreshold', value: n,
+      });
+    } catch (e) { /* ignore — host may not be running */ }
+  }
+  rokuVoteThresholdInput.addEventListener('change', async () => {
+    const n = clampThreshold(rokuVoteThresholdInput.value);
+    rokuVoteThresholdInput.value = String(n);
+    await saveVoteSkipThreshold(n);
+    await pushVoteSkipThreshold(n);
+  });
+
   rokuStartBtn.addEventListener('click', async () => {
     rokuStartBtn.disabled = true;
     const port = parseInt(rokuPortInput.value, 10) || 8787;
@@ -3173,6 +3211,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateRokuUI({ hosting: false });
       } else {
         updateRokuUI(resp);
+        // Re-push threshold so a fresh host process gets the current value.
+        const n = clampThreshold(rokuVoteThresholdInput.value);
+        pushVoteSkipThreshold(n);
       }
     } catch (e) {
       alert('Error: ' + e.message);
@@ -3301,6 +3342,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Initialize status, forwarder state, and last event on load
+  loadVoteSkipThreshold();
   chrome.runtime.sendMessage({ action: 'rokuGetStatus' }).then(resp => {
     if (resp && !resp.error) updateRokuUI(resp);
   }).catch(() => {});

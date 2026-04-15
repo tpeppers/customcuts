@@ -19,6 +19,11 @@ class CCPlayer(xbmc.Player):
 
     # Kodi callbacks --------------------------------------------------------
     def onAVStarted(self):
+        # Each new item clears the previous item's terminal events so that
+        # `ended` / `stopped` / `errored` always reflect the CURRENT playback.
+        self.ended.clear()
+        self.stopped.clear()
+        self.errored.clear()
         self.started.set()
 
     def onPlayBackEnded(self):

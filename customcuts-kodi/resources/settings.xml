@@ -1,30 +1,30 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <settings version="1">
     <section id="customcuts">
-        <category id="connection" label="Connection">
-            <group id="1" label="Host">
-                <setting id="host_url" type="string" label="Host URL" help="e.g. http://192.168.1.42:8787">
+        <category id="connection" label="30000">
+            <group id="1" label="30001">
+                <setting id="host_url" type="string" label="30002" help="30003">
                     <level>0</level>
-                    <default></default>
+                    <default>http://192.168.1.100:8787</default>
                     <control type="edit" format="string">
-                        <heading>Host URL</heading>
+                        <heading>30002</heading>
                     </control>
                 </setting>
-                <setting id="auth_token" type="string" label="Auth token" help="32-char hex token from the CustomCuts Cast panel">
+                <setting id="auth_token" type="string" label="30004" help="30005">
                     <level>0</level>
-                    <default></default>
+                    <default>paste-token-from-cast-panel</default>
                     <control type="edit" format="string">
-                        <heading>Auth token</heading>
+                        <heading>30004</heading>
                     </control>
                 </setting>
             </group>
-            <group id="2" label="Discovery">
-                <setting id="auto_discover" type="boolean" label="Run LAN discovery on launch if host is unreachable">
+            <group id="2" label="30006">
+                <setting id="auto_discover" type="boolean" label="30007">
                     <level>0</level>
                     <default>true</default>
                     <control type="toggle"/>
                 </setting>
-                <setting id="discovery_timeout_ms" type="number" label="Discovery timeout (ms)">
+                <setting id="discovery_timeout_ms" type="integer" label="30008">
                     <level>0</level>
                     <default>3000</default>
                     <constraints>

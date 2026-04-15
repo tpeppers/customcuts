@@ -736,6 +736,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       rokuHost.getRemoteQr().then(sendResponse);
       return true;
 
+    case 'rokuSetVoteSkipThreshold':
+      rokuHost.setVoteSkipThreshold(message.value).then(sendResponse);
+      return true;
+
     case 'getSettings':
       getSettings().then(settings => sendResponse(settings));
       return true;

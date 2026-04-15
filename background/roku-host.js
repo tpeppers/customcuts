@@ -202,11 +202,17 @@ export async function buildQueuePayload() {
   for (const v of q) {
     if (!v?.url) continue;
     const cuts = await resolveCutsForUrl(v.url);
+    // Pull ratings out of video_<url> so the host can serve them in
+    // /state.json for the phone remote's rating display.
+    const videoId = 'video_' + v.url;
+    const vdData = await chrome.storage.local.get(videoId);
+    const vd = vdData[videoId] || {};
     out.push({
       id: slugId(v.url),
       title: v.title || v.url,
       url: v.url,
       cuts: { ...cuts, startMode, endMode },
+      ratings: vd.ratings || {},
     });
   }
   return out;
@@ -254,6 +260,15 @@ export async function rotateAuthToken() {
 
 export async function getRemoteQr() {
   const resp = await sendCommand({ cmd: 'get_remote_qr' }, 'remote_qr');
+  return resp;
+}
+
+export async function setVoteSkipThreshold(value) {
+  const n = Math.max(1, Math.min(4, Number(value) | 0));
+  const resp = await sendCommand(
+    { cmd: 'set_vote_skip_threshold', value: n },
+    'vote_skip_threshold_set',
+  );
   return resp;
 }
 
@@ -328,6 +343,61 @@ async function handleRemoteCommand(cmd, args) {
       }, 'command_enqueued').catch(e =>
         console.error('[roku-host] refresh_queue after load failed', e));
     }, 200);
+    return;
+  }
+  if (cmd === 'queue_remove_url') {
+    const url = args?.url;
+    if (!url) return;
+    const data = await chrome.storage.local.get('videoQueue');
+    const q = Array.isArray(data.videoQueue) ? data.videoQueue : [];
+    const filtered = q.filter(v => v.url !== url);
+    if (filtered.length === q.length) return;
+    console.log('[roku-host] queue_remove_url:', url, `${q.length}→${filtered.length}`);
+    await chrome.storage.local.set({ videoQueue: filtered });
+    // storage.onChanged auto-pushes the updated queue to the host.
+    return;
+  }
+  if (cmd === 'rate_url') {
+    // Phone remote rating: write ratings[person] = stars on the video's
+    // storage entry. Matches rateRokuCurrent but accepts an explicit URL
+    // so it's not coupled to lastRokuEvent.
+    const url = args?.url;
+    const person = args?.person;
+    const stars = args?.stars;
+    if (!url || !person || stars == null) return;
+    const videoId = 'video_' + url;
+    const data = await chrome.storage.local.get(videoId);
+    const vd = data[videoId] || {};
+    const ratings = { ...(vd.ratings || {}), [person]: Number(stars) };
+    await chrome.storage.local.set({
+      [videoId]: { ...vd, ratings, lastRated: Date.now() },
+    });
+    console.log('[roku-host] rate_url:', person, '=', stars, 'for', url);
+    return;
+  }
+  if (cmd === 'vote_skip_triggered') {
+    // Server says 2+ personas voted to skip. Add a VOTE-SKIPPED point
+    // tag at the reported position so the moment is preserved in the
+    // video's tag history. queue_remove_url has been relayed separately
+    // and handled above.
+    const url = args?.url;
+    const position = Number(args?.position) || 0;
+    const voters = Array.isArray(args?.voters) ? args.voters : [];
+    if (!url) return;
+    const videoId = 'video_' + url;
+    const data = await chrome.storage.local.get(videoId);
+    const vd = data[videoId] || {};
+    const tags = Array.isArray(vd.tags) ? [...vd.tags] : [];
+    tags.push({
+      name: 'VOTE-SKIPPED',
+      startTime: position,
+      endTime: position,
+      createdAt: Date.now(),
+      voters,
+    });
+    await chrome.storage.local.set({ [videoId]: { ...vd, tags } });
+    console.log('[roku-host] vote_skip_triggered:', url, 'at', position, 'by', voters);
+    return;
   }
 }
 

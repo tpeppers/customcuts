@@ -15,7 +15,9 @@ queue and stream media.
 
 import sys
 import os
+import base64
 import json
+import re
 import secrets
 import struct
 import threading
@@ -25,7 +27,7 @@ import urllib.request
 import urllib.error
 import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin, parse_qs
 
 # Windows requires binary mode for stdin/stdout with Chrome native messaging
 if sys.platform == 'win32':
@@ -102,6 +104,16 @@ _COMMAND_TTL = 60  # seconds before a command is dropped if unpolled
 # a now-playing display without going through the extension.
 _playlists_state = {'playlists': [], 'version': 0}
 _last_event = None
+
+# Phase 6: multi-client vote-skip. Each connected phone picks a persona
+# (P1..P4) via the dropdown in the remote UI; voting is tagged with that
+# persona. N distinct personas hitting Vote-Skip on the same URL triggers
+# a remove + advance. Votes are scoped to the currently-playing URL and
+# cleared whenever the playing URL changes. Threshold is settable via
+# native command from the extension Cast panel (1..4).
+_vote_skip_threshold = 2
+_current_vote_url = None
+_current_votes = set()  # set of persona strings
 
 _server = None
 _server_thread = None
@@ -186,6 +198,26 @@ def rotate_token():
     return {'type': 'token_rotated', 'ok': True, 'auth_token': _auth_token}
 
 
+def set_vote_skip_threshold_value(value):
+    """Update the module-wide vote-skip threshold. Accepts 1..4."""
+    global _vote_skip_threshold
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return {
+            'type': 'vote_skip_threshold_set',
+            'ok': False, 'error': 'value must be an integer',
+        }
+    if not (1 <= n <= 4):
+        return {
+            'type': 'vote_skip_threshold_set',
+            'ok': False, 'error': 'value must be 1..4',
+        }
+    _vote_skip_threshold = n
+    log(f'vote-skip threshold set to {n}', 2)
+    return {'type': 'vote_skip_threshold_set', 'ok': True, 'value': n}
+
+
 def get_lan_ip():
     """Best-effort LAN IP detection via UDP socket trick."""
     try:
@@ -198,13 +230,153 @@ def get_lan_ip():
         return '127.0.0.1'
 
 
+_BROWSER_UA = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+    '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+)
+
+# Custom-resolver domain family. Any host whose name ends in
+# "<something>tube.com" goes through the HTML-scraping resolver below
+# instead of yt-dlp's generic extractor, which on these sites picks up
+# the unsigned JSON-LD contentUrl and returns 404/405 on fetch. The
+# pattern is deliberately broad so the resolver works for any host in
+# this family without a hardcoded allow-list.
+_CUSTOM_RESOLVER_HOST_RE = re.compile(
+    r'^(?:www\.)?[a-z0-9]+tube\.com$', re.IGNORECASE,
+)
+
+# Matches a /download/<id>?m=<hash> link inside the watch-page HTML.
+# The id shape is a VK-style "-<group>_<item>" pair.
+_DOWNLOAD_LINK_RE = re.compile(r'"(/download/-?\d+_\d+\?m=[a-f0-9]+)"')
+
+# Matches any signed mp4 URL that lives under a /videos/ path. We stay
+# domain-agnostic on purpose — the quality extractors below act as the
+# real filter, discarding anything whose path doesn't encode a
+# recognizable resolution.
+_SIGNED_MP4_URL_RE = re.compile(
+    r'https://[A-Za-z0-9.\-]+/videos/[^"<>\s]+\.mp4\?[^"<>\s]+'
+)
+
+# Two known URL shapes that encode quality in the path:
+#   .../vid_1080p.mp4
+#   .../videos/1080/-123_456.mp4
+_QUALITY_VID_FILE_RE = re.compile(r'vid_(\d+)p\.mp4')
+_QUALITY_VID_DIR_RE = re.compile(r'/videos/(\d+)/[-\d_]+\.mp4')
+
+
+def _extract_quality_from_url(url):
+    m = _QUALITY_VID_FILE_RE.search(url) or _QUALITY_VID_DIR_RE.search(url)
+    if not m:
+        return 0
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return 0
+
+
+def _fetch_site_page(url, referer):
+    req = urllib.request.Request(url, headers={
+        'User-Agent': _BROWSER_UA,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': referer,
+    })
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read().decode('utf-8', errors='replace')
+
+
+def _pick_best_quality_url(candidates):
+    """Given signed mp4 URLs scraped from a page, extract the resolution
+    from each (dropping anything we can't identify) and return the highest
+    variant ≤ 1080p as (quality, url)."""
+    qualified = []
+    for url in candidates:
+        clean = url.replace('&amp;', '&')
+        q = _extract_quality_from_url(clean)
+        if q > 0:
+            qualified.append((q, clean))
+    if not qualified:
+        return None
+    qualified.sort(key=lambda c: c[0], reverse=True)
+    return next(((q, u) for (q, u) in qualified if q <= 1080), qualified[0])
+
+
+def _resolve_via_site_html(page_url):
+    """Custom HTML-scraping resolver for hosts matching
+    _CUSTOM_RESOLVER_HOST_RE. yt-dlp's generic extractor picks the
+    unsigned contentUrl from JSON-LD, which returns 404 — we need to
+    parse the signed CDN URLs directly out of the page HTML.
+
+    Some watch pages render the player's source URLs inline; others load
+    the player asynchronously via JS and the watch page is effectively a
+    loading spinner. The universal fallback is the /download/<id>?m=<h>
+    link, which always points at a page listing the real playable URLs.
+    """
+    parsed = urlparse(page_url)
+    site_origin = f'{parsed.scheme}://{parsed.netloc}/'
+
+    watch_html = _fetch_site_page(page_url, site_origin)
+
+    raw_candidates = _SIGNED_MP4_URL_RE.findall(watch_html)
+    best = _pick_best_quality_url(raw_candidates)
+    if best is not None:
+        q, url = best
+        log(f'site resolver: picked {q}p from watch page ({len(raw_candidates)} candidates)', 2)
+    else:
+        # Watch page had no inline mp4 URLs — follow the /download/ link.
+        dl_match = _DOWNLOAD_LINK_RE.search(watch_html)
+        if not dl_match:
+            raise RuntimeError(
+                'site resolver: no inline URLs and no /download/ link on watch page'
+            )
+        dl_path = dl_match.group(1).replace('&amp;', '&')
+        dl_url = urljoin(page_url, dl_path)
+        log(f'site resolver: watch page is async, following {dl_url}', 2)
+        dl_html = _fetch_site_page(dl_url, page_url)
+        raw_candidates = _SIGNED_MP4_URL_RE.findall(dl_html)
+        best = _pick_best_quality_url(raw_candidates)
+        if best is None:
+            raise RuntimeError('site resolver: download page had no quality-tagged mp4 URLs')
+        q, url = best
+        log(f'site resolver: picked {q}p from download page ({len(raw_candidates)} candidates)', 2)
+
+    return {
+        'direct_url': url,
+        'headers': {
+            'User-Agent': _BROWSER_UA,
+            'Referer': site_origin,
+        },
+        'resolved_at': datetime.datetime.now().timestamp(),
+        'content_type': 'mp4',
+    }
+
+
 def resolve_video(entry_id, page_url):
-    """Run yt-dlp to extract a direct media URL for a page URL. Cached."""
+    """Resolve a page URL to a direct playable URL. Cached for 30 minutes.
+
+    Tries site-specific resolvers first (for sites where yt-dlp's generic
+    extractor misidentifies the video URL), then falls back to yt-dlp."""
     now = datetime.datetime.now().timestamp()
     with _state_lock:
         cached = _resolve_cache.get(entry_id)
         if cached and (now - cached['resolved_at']) < _RESOLVE_TTL:
             return cached
+
+    domain = urlparse(page_url).netloc.lower()
+
+    # Site-family fast path — skips yt-dlp for hosts where its generic
+    # extractor picks the wrong URL. The host allow-list is expressed as
+    # a regex so any new host matching the same family works without code
+    # changes (and no specific host name lives in the source).
+    if _CUSTOM_RESOLVER_HOST_RE.match(domain):
+        try:
+            log(f'site resolver: id={entry_id} url={page_url}', 2)
+            result = _resolve_via_site_html(page_url)
+            with _state_lock:
+                _resolve_cache[entry_id] = result
+            return result
+        except Exception as ex:
+            log(f'site resolver failed, falling back to yt-dlp: {ex}', 1)
 
     try:
         import yt_dlp  # lazy
@@ -221,9 +393,13 @@ def resolve_video(entry_id, page_url):
         'skip_download': True,
     }
 
-    log(f'yt-dlp resolving id={entry_id} url={page_url}', 3)
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(page_url, download=False)
+    log(f'yt-dlp resolving id={entry_id} url={page_url}', 2)
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(page_url, download=False)
+    except Exception as ex:
+        log(f'yt-dlp extract_info failed for url={page_url}: {ex}', 0)
+        raise
 
     if info is None:
         raise RuntimeError(f'yt-dlp returned no info for {page_url}')
@@ -480,10 +656,29 @@ class CCHandler(BaseHTTPRequestHandler):
             if path == '/state.json':
                 if not self._check_auth(): return
                 with _state_lock:
+                    le = dict(_last_event) if _last_event else None
+                    if le and le.get('url'):
+                        # Enrich with ratings from the extension-pushed
+                        # queue metadata, so the phone can display the
+                        # current rating for the selected persona without
+                        # needing its own chrome.storage access.
+                        for entry in _queue_state['queue']:
+                            if entry.get('url') == le['url']:
+                                if 'ratings' in entry:
+                                    le['ratings'] = dict(entry['ratings'])
+                                break
+                    vote_url = _current_vote_url
+                    voters = sorted(_current_votes)
                     state = {
                         'queue_version': _queue_state['version'],
                         'queue_count': len(_queue_state['queue']),
-                        'last_event': dict(_last_event) if _last_event else None,
+                        'last_event': le,
+                        'vote_skip': {
+                            'url': vote_url,
+                            'voters': voters,
+                            'count': len(voters),
+                            'threshold': _vote_skip_threshold,
+                        },
                     }
                 self._json(200, state)
                 return
@@ -537,7 +732,33 @@ class CCHandler(BaseHTTPRequestHandler):
                     log(f'media resolve error: {ex}', 0)
                     self.send_error(502, f'resolve failed: {ex}')
                     return
-                self._proxy_stream(r['direct_url'], r['headers'])
+                self._proxy_stream(
+                    r['direct_url'], r['headers'], entry_id=entry_id,
+                )
+                return
+
+            if path == '/hls':
+                # HLS segment / nested-playlist proxy. The /media endpoint
+                # rewrites m3u8 URIs to point here so segment requests hit
+                # our auth'd proxy (with the cached upstream headers) instead
+                # of trying to resolve back into /media/<id>.
+                if not self._check_auth(plain=True): return
+                qs = parse_qs(urlparse(self.path).query)
+                b64_url = (qs.get('u') or [None])[0]
+                entry_id = (qs.get('e') or [None])[0]
+                if not b64_url or not entry_id:
+                    self.send_error(400, 'missing e or u')
+                    return
+                try:
+                    upstream_url = base64.urlsafe_b64decode(
+                        b64_url.encode('ascii')).decode('utf-8')
+                except Exception as ex:
+                    self.send_error(400, f'bad u param: {ex}')
+                    return
+                with _state_lock:
+                    cached = _resolve_cache.get(entry_id)
+                headers = dict(cached.get('headers', {})) if cached else {}
+                self._proxy_stream(upstream_url, headers, entry_id=entry_id)
                 return
 
             self.send_error(404, 'not found')
@@ -563,9 +784,17 @@ class CCHandler(BaseHTTPRequestHandler):
             except Exception:
                 payload = {'raw': body.decode('utf-8', errors='replace')}
             log(f'roku event: {payload}', 3)
-            global _last_event
+            global _last_event, _current_vote_url, _current_votes
             with _state_lock:
                 _last_event = dict(payload) if isinstance(payload, dict) else None
+                # Clear any pending vote-skip state when the playing URL
+                # changes. Votes only apply to the current video.
+                new_url = _last_event.get('url') if _last_event else None
+                if new_url != _current_vote_url:
+                    if _current_votes:
+                        log(f'vote-skip: clearing {len(_current_votes)} votes (url changed)', 2)
+                    _current_vote_url = new_url
+                    _current_votes = set()
             try:
                 send_message({'type': 'roku_event', 'event': payload})
             except Exception as ex:
@@ -591,13 +820,24 @@ class CCHandler(BaseHTTPRequestHandler):
             if not cmd_name:
                 self._json(400, {'error': 'missing cmd'})
                 return
+
+            # vote_skip is handled entirely server-side: accumulate votes
+            # from distinct personas on the same URL, and only trigger the
+            # skip+tag+advance chain once the threshold is met.
+            if cmd_name == 'vote_skip':
+                resp = self._handle_vote_skip(args)
+                self._json(200, resp)
+                return
+
             seq = enqueue_command_internal(cmd_name, args)
-            if cmd_name in ('load_playlist', 'load_playlist_shuffled'):
-                # The extension handles the actual load by rewriting
-                # videoQueue, which auto-pushes to the host. The refresh
-                # nudge to the Roku is enqueued by the extension AFTER
-                # set_queue completes, to avoid a race where the Roku
-                # re-fetches the stale queue.
+            # Commands that need the extension to manipulate chrome.storage
+            # (load a saved playlist, drop a played video from videoQueue,
+            # write ratings) are also relayed via native messaging so
+            # roku-host.js can run them.
+            if cmd_name in (
+                'load_playlist', 'load_playlist_shuffled',
+                'queue_remove_url', 'rate_url',
+            ):
                 try:
                     send_message({
                         'type': 'remote_command',
@@ -611,13 +851,89 @@ class CCHandler(BaseHTTPRequestHandler):
 
         self.send_error(404, 'not found')
 
-    def _proxy_stream(self, url, headers):
-        """Stream url through to the client with Range support."""
+    def _handle_vote_skip(self, args):
+        """Accumulate a vote-skip from a persona. When 2+ distinct personas
+        have voted for the current URL, trigger: (a) a VOTE-SKIPPED point tag
+        at the reported position via the extension, (b) queue_remove_url via
+        the extension, (c) a 'next' command enqueued for the Roku/Kodi to
+        advance. Returns status (and triggered=bool) for the caller to show."""
+        global _current_vote_url, _current_votes
+        url = (args or {}).get('url')
+        person = (args or {}).get('person')
+        position = (args or {}).get('position') or 0
+        if not url or not person:
+            return {'ok': False, 'error': 'missing url or person'}
+
+        with _state_lock:
+            le_url = (_last_event or {}).get('url') if _last_event else None
+
+        # Require the vote to match the server's notion of the currently
+        # playing URL to avoid stale votes from old /state polls.
+        if le_url and url != le_url:
+            log(f'vote-skip: stale url {url} (current={le_url})', 1)
+            return {'ok': False, 'error': 'stale url', 'current_url': le_url}
+
+        triggered = False
+        with _state_lock:
+            if url != _current_vote_url:
+                _current_vote_url = url
+                _current_votes = set()
+            _current_votes.add(person)
+            voters = sorted(_current_votes)
+            count = len(voters)
+            if count >= _vote_skip_threshold:
+                triggered = True
+                _current_votes = set()
+                _current_vote_url = None
+
+        log(f'vote-skip: {person} voted on {url} ({count}/{_vote_skip_threshold})', 2)
+
+        if triggered:
+            log(f'vote-skip: threshold reached, triggering skip for {url}', 2)
+            # Tell the extension to (a) add a VOTE-SKIPPED point tag at the
+            # reported position and (b) drop the URL from videoQueue.
+            try:
+                send_message({
+                    'type': 'remote_command',
+                    'cmd': 'vote_skip_triggered',
+                    'args': {
+                        'url': url,
+                        'position': position,
+                        'voters': voters,
+                    },
+                })
+            except Exception as ex:
+                log(f'relay vote_skip_triggered failed: {ex}', 1)
+            try:
+                send_message({
+                    'type': 'remote_command',
+                    'cmd': 'queue_remove_url',
+                    'args': {'url': url},
+                })
+            except Exception as ex:
+                log(f'relay queue_remove_url failed: {ex}', 1)
+            enqueue_command_internal('next', {})
+
+        return {
+            'ok': True,
+            'voters': voters,
+            'count': count,
+            'threshold': _vote_skip_threshold,
+            'triggered': triggered,
+        }
+
+    def _proxy_stream(self, url, headers, entry_id=None):
+        """Stream url through to the client with Range support.
+
+        If the upstream returns an HLS playlist (m3u8), rewrite its URIs so
+        segment/variant fetches route back through /hls with the auth token
+        and the cached upstream headers — otherwise Kodi/players would try
+        to resolve relative segment paths against /media/<id> and 401.
+        """
         req_headers = dict(headers or {})
         rng = self.headers.get('Range')
         if rng:
             req_headers['Range'] = rng
-        # Some CDNs require a User-Agent even if yt-dlp didn't set one
         req_headers.setdefault('User-Agent',
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
             '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
@@ -625,6 +941,15 @@ class CCHandler(BaseHTTPRequestHandler):
         req = urllib.request.Request(url, headers=req_headers)
         try:
             with urllib.request.urlopen(req, timeout=30) as upstream:
+                ctype = (upstream.headers.get('Content-Type') or '').lower()
+                is_hls = (
+                    'mpegurl' in ctype
+                    or url.lower().split('?', 1)[0].endswith('.m3u8')
+                )
+                if is_hls and entry_id:
+                    self._serve_hls_playlist(upstream, url, entry_id)
+                    return
+
                 self.send_response(upstream.status)
                 for h in ('Content-Type', 'Content-Length', 'Content-Range',
                           'Accept-Ranges', 'Last-Modified', 'ETag'):
@@ -653,6 +978,56 @@ class CCHandler(BaseHTTPRequestHandler):
                 self.send_error(502, f'upstream error: {ex}')
             except Exception:
                 pass
+
+    def _serve_hls_playlist(self, upstream, base_url, entry_id):
+        """Read an HLS playlist, rewrite its URIs, serve it back. Handles
+        both master playlists (variant references) and media playlists
+        (segment references), plus URI="..." attributes in EXT-X-KEY,
+        EXT-X-MAP, EXT-X-MEDIA, and EXT-X-I-FRAME-STREAM-INF directives."""
+        raw = upstream.read().decode('utf-8', errors='replace')
+        rewritten = rewrite_hls_playlist(raw, base_url, entry_id, _auth_token or '')
+        data = rewritten.encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/vnd.apple.mpegurl')
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            log('client disconnected during m3u8 write', 3)
+
+
+_HLS_URI_ATTR_RE = re.compile(r'URI="([^"]+)"')
+
+
+def rewrite_hls_playlist(content, base_url, entry_id, auth_token):
+    """Rewrite relative/absolute URIs in an HLS playlist so they point back
+    through /hls on this host. Pure function — testable without a request.
+    """
+    def make_proxy_url(uri):
+        absolute = urljoin(base_url, uri)
+        u_b64 = base64.urlsafe_b64encode(absolute.encode('utf-8')).decode('ascii')
+        return f'/hls?e={entry_id}&u={u_b64}&tok={auth_token}'
+
+    def replace_uri_attr(m):
+        return f'URI="{make_proxy_url(m.group(1))}"'
+
+    out = []
+    for line in content.splitlines():
+        s = line.strip()
+        if not s:
+            out.append(line)
+            continue
+        if s.startswith('#'):
+            if 'URI=' in s:
+                out.append(_HLS_URI_ATTR_RE.sub(replace_uri_attr, line))
+            else:
+                out.append(line)
+            continue
+        out.append(make_proxy_url(s))
+    return '\n'.join(out)
 
 
 # Server lifecycle --------------------------------------------------------
@@ -774,9 +1149,14 @@ def handle_command(msg):
             'queue_version': qv,
             'queue_count': qc,
             'auth_token': _auth_token,
+            'vote_skip_threshold': _vote_skip_threshold,
         }
     if cmd == 'rotate_token':
         return rotate_token()
+    if cmd == 'set_vote_skip_threshold':
+        return set_vote_skip_threshold_value(
+            msg.get('value', _vote_skip_threshold),
+        )
     if cmd == 'get_remote_qr':
         url = build_remote_url()
         if url is None:
