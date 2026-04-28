@@ -679,6 +679,13 @@ export function normalizeLocalPath(p) {
   return (p || '').replace(/\\/g, '/').toLowerCase();
 }
 
+export async function resolveDirectUrl(url) {
+  // Ask the native host (yt-dlp) for the direct media URL behind a page.
+  // Returns { ok, url, ext } on success, { ok:false, error } otherwise.
+  if (!url) return { ok: false, error: 'no url' };
+  return await sendCommand({ cmd: 'resolve_url', url }, 'url_resolved', 30000);
+}
+
 export async function resolvePlayUrl(url) {
   // If the video has a localPath, return a file:// URL that Chrome can
   // open directly — no native host required. Otherwise return the

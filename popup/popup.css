@@ -291,6 +291,18 @@ h3 {
   color: white;
 }
 
+.download-video-btn {
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
+#download-section .feedback-status {
+  display: block;
+  margin-top: 6px;
+  text-align: center;
+}
+
 .btn-primary:hover {
   background: #2980b9;
 }

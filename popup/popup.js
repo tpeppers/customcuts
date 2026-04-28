@@ -140,6 +140,38 @@ document.addEventListener('DOMContentLoaded', async () => {
   // (remote) URL so getVideoId() returns the right storage key.
   let _canonicalTabUrl = null;
 
+  function setupDownloadButton(tabUrl) {
+    const section = document.getElementById('download-section');
+    const btn = document.getElementById('download-video-btn');
+    const status = document.getElementById('download-video-status');
+    if (!section || !btn) return;
+
+    if (!/^https:\/\/x\.com\//i.test(tabUrl)) {
+      section.classList.add('hidden');
+      return;
+    }
+    section.classList.remove('hidden');
+
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      status.textContent = 'Resolving...';
+      try {
+        const r = await chrome.runtime.sendMessage({
+          action: 'downloadVideo', url: tabUrl,
+        });
+        if (r && r.ok) {
+          status.textContent = `Downloading ${r.filename || ''}`.trim();
+        } else {
+          status.textContent = `Failed: ${r?.error || 'unknown error'}`;
+        }
+      } catch (e) {
+        status.textContent = `Failed: ${e?.message || e}`;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+
   async function init() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     currentTab = tab;
@@ -149,6 +181,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (tab.url && tab.url.startsWith('file://')) {
       _canonicalTabUrl = await resolveCanonical(tab.url);
     }
+
+    // Show "Download Video" button only on x.com (formerly Twitter) pages.
+    setupDownloadButton(tab.url || '');
 
     // Load popup settings first
     await loadPopupSettings();

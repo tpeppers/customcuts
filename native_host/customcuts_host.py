@@ -1633,6 +1633,23 @@ def handle_command(msg):
             'type': 'remote_qr', 'ok': True,
             'url': url, 'svg': svg,
         }
+    if cmd == 'resolve_url':
+        page_url = msg.get('url') or ''
+        if not page_url:
+            return {'type': 'url_resolved', 'ok': False, 'error': 'no url'}
+        try:
+            r = resolve_video(page_url, page_url)
+            return {
+                'type': 'url_resolved', 'ok': True,
+                'url': r['direct_url'],
+                'ext': r.get('content_type', 'mp4'),
+            }
+        except Exception as ex:
+            log(f'resolve_url failed for {page_url}: {ex}', 0)
+            return {
+                'type': 'url_resolved', 'ok': False,
+                'error': str(ex),
+            }
     return {'type': 'error', 'error': f'unknown cmd: {cmd}'}
 
 

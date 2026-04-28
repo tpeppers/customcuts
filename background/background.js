@@ -1,5 +1,20 @@
 import * as rokuHost from './roku-host.js';
 
+function suggestDownloadFilename(pageUrl, ext) {
+  // For x.com/twitter status URLs, build "<user>-<id>.<ext>". Falls back
+  // to the URL's last path segment if the pattern doesn't match.
+  const safeExt = (ext || 'mp4').replace(/[^A-Za-z0-9]/g, '') || 'mp4';
+  try {
+    const u = new URL(pageUrl);
+    const m = u.pathname.match(/^\/([^/]+)\/status\/(\d+)/);
+    if (m) return `${m[1]}-${m[2]}.${safeExt}`;
+    const seg = u.pathname.split('/').filter(Boolean).pop() || 'video';
+    return `${seg}.${safeExt}`;
+  } catch (_) {
+    return `video.${safeExt}`;
+  }
+}
+
 const DEFAULT_SETTINGS = {
   fastForwardSmall: 10,
   fastForwardLarge: 30,
@@ -726,6 +741,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'resolveCanonicalFromLocal':
       rokuHost.resolveCanonicalFromLocal(message.url || '').then(sendResponse);
+      return true;
+
+    case 'downloadVideo':
+      (async () => {
+        const pageUrl = message.url || '';
+        try {
+          const r = await rokuHost.resolveDirectUrl(pageUrl);
+          if (!r || !r.ok || !r.url) {
+            sendResponse({ ok: false, error: r?.error || 'resolve failed' });
+            return;
+          }
+          const filename = suggestDownloadFilename(pageUrl, r.ext || 'mp4');
+          const id = await chrome.downloads.download({
+            url: r.url,
+            filename,
+            saveAs: false,
+          });
+          sendResponse({ ok: true, downloadId: id, filename });
+        } catch (e) {
+          sendResponse({ ok: false, error: e?.message || String(e) });
+        }
+      })();
       return true;
 
     case 'featuredCaptureRequest':
