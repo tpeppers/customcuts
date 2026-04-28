@@ -62,6 +62,13 @@ class CustomCutsAPI:
     def get_playlists(self):
         return self._request('GET', '/playlists.json')
 
+    def get_featured(self):
+        """Returns {version, classics: [...], incoming: [...]}. Each item
+        has {url, title, thumb_path, thumb_url, thumb_exists}. thumb_url is
+        already prefixed with http://host:port/ and includes ?tok= so Kodi
+        ListItem.setArt can fetch it directly."""
+        return self._request('GET', '/featured.json')
+
     def get_state(self):
         return self._request('GET', '/state.json')
 

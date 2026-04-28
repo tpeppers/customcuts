@@ -16,10 +16,13 @@ queue and stream media.
 import sys
 import os
 import base64
+import hashlib
 import json
 import re
 import secrets
+import shutil
 import struct
+import subprocess
 import threading
 import socket
 import traceback
@@ -40,6 +43,14 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(_SCRIPT_DIR, 'customcuts_host.log')
 TOKEN_FILE = os.path.join(_SCRIPT_DIR, 'customcuts_host.token')
 REMOTE_APP_DIR = os.path.join(_SCRIPT_DIR, 'remote_app')
+THUMBS_DIR = os.path.join(_SCRIPT_DIR, 'thumbs')
+TRANSMUX_DIR = os.path.join(_SCRIPT_DIR, 'transmux_cache')
+
+# Featured playlists are two exact-name matches. The extension pushes the
+# full video lists for these via set_featured; the host serves them as
+# /featured.json and stores per-URL JPEG thumbnails in THUMBS_DIR.
+FEATURED_CLASSICS_NAME = 'Featured Videos - Classics'
+FEATURED_INCOMING_NAME = 'Featured Videos - Incoming'
 LOG_LEVEL = 2  # 0=ERROR 1=WARN 2=INFO 3=DEBUG
 _log_lock = threading.Lock()
 
@@ -103,6 +114,7 @@ _COMMAND_TTL = 60  # seconds before a command is dropped if unpolled
 # the Roku is mirrored here for /state.json so the phone remote can show
 # a now-playing display without going through the extension.
 _playlists_state = {'playlists': [], 'version': 0}
+_featured_state = {'classics': [], 'incoming': [], 'version': 0}
 _last_event = None
 
 # Phase 6: multi-client vote-skip. Each connected phone picks a persona
@@ -188,6 +200,30 @@ def build_remote_qr_svg(url):
     img = qr.make_image(image_factory=SvgPathImage)
     img.save(buf)
     return buf.getvalue().decode('utf-8')
+
+
+def build_remote_qr_png(url):
+    """Return QR code as PNG bytes, or None if qrcode/pillow unavailable."""
+    try:
+        import qrcode
+        import io
+    except ImportError:
+        return None
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=12, border=4,
+    )
+    qr.add_data(url)
+    qr.make(fit=True)
+    try:
+        img = qr.make_image(fill_color='black', back_color='white')
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        return buf.getvalue()
+    except Exception as ex:
+        log(f'QR PNG generation failed: {ex}', 1)
+        return None
 
 
 def rotate_token():
@@ -354,12 +390,30 @@ def _resolve_via_site_html(page_url):
     }
 
 
-def resolve_video(entry_id, page_url):
+def resolve_video(entry_id, page_url, local_path=None):
     """Resolve a page URL to a direct playable URL. Cached for 30 minutes.
+
+    If *local_path* is set and the file exists on disk, it is returned
+    immediately — no yt-dlp or network I/O. This gives local copies
+    unconditional priority over remote sources.
 
     Tries site-specific resolvers first (for sites where yt-dlp's generic
     extractor misidentifies the video URL), then falls back to yt-dlp."""
     now = datetime.datetime.now().timestamp()
+
+    # Local file takes priority — skip cache/yt-dlp entirely.
+    if local_path and os.path.isfile(local_path):
+        result = {
+            'direct_url': local_path,
+            'headers': {},
+            'resolved_at': now,
+            'content_type': os.path.splitext(local_path)[1].lstrip('.') or 'mp4',
+            'is_local': True,
+        }
+        with _state_lock:
+            _resolve_cache[entry_id] = result
+        return result
+
     with _state_lock:
         cached = _resolve_cache.get(entry_id)
         if cached and (now - cached['resolved_at']) < _RESOLVE_TTL:
@@ -543,6 +597,143 @@ def get_commands_since(since_seq):
     return out, next_seq
 
 
+def thumb_hash(url):
+    """16-char hex SHA1 of the video URL — short enough for a filename,
+    long enough that accidental collisions across one user's library are
+    astronomical."""
+    return hashlib.sha1((url or '').encode('utf-8')).hexdigest()[:16]
+
+
+def thumb_file_for(url):
+    return os.path.join(THUMBS_DIR, f'{thumb_hash(url)}.jpg')
+
+
+def thumb_exists_for(url):
+    try:
+        return os.path.isfile(thumb_file_for(url))
+    except Exception:
+        return False
+
+
+# Transmux: convert local files to Roku/Kodi-friendly MP4 -----------------
+_transmux_lock = threading.Lock()
+
+
+def _find_ffmpeg():
+    """Return the path to ffmpeg, or None."""
+    path = shutil.which('ffmpeg')
+    if path:
+        return path
+    # Common install locations on Windows
+    for d in [r'C:\ffmpeg\bin', r'C:\Program Files\ffmpeg\bin',
+              os.path.join(os.environ.get('LOCALAPPDATA', ''), 'ffmpeg', 'bin')]:
+        candidate = os.path.join(d, 'ffmpeg.exe')
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _transmux_path_for(entry_id, source_path):
+    """Return the cached transmuxed MP4 path for a given entry."""
+    # Include a hash of the source path so different files with the same
+    # entry ID don't collide (e.g. if the queue changes).
+    key = hashlib.sha1((entry_id + '|' + source_path).encode()).hexdigest()[:16]
+    return os.path.join(TRANSMUX_DIR, f'{key}.mp4')
+
+
+def transmux_local_file(entry_id, source_path):
+    """Transmux a local video file to a Roku-friendly fragmented MP4.
+
+    Uses ffmpeg -c copy (no transcoding — near-instant for most files).
+    Returns the path to the transmuxed MP4, or None on failure.
+    The result is cached on disk so subsequent requests are instant."""
+    out_path = _transmux_path_for(entry_id, source_path)
+
+    # Already cached and source hasn't changed?
+    if os.path.isfile(out_path):
+        try:
+            if os.path.getmtime(out_path) >= os.path.getmtime(source_path):
+                return out_path
+        except OSError:
+            pass
+
+    ffmpeg = _find_ffmpeg()
+    if not ffmpeg:
+        log('transmux: ffmpeg not found on PATH', 1)
+        return None
+
+    with _transmux_lock:
+        # Double-check after acquiring lock
+        if os.path.isfile(out_path):
+            try:
+                if os.path.getmtime(out_path) >= os.path.getmtime(source_path):
+                    return out_path
+            except OSError:
+                pass
+
+        os.makedirs(TRANSMUX_DIR, exist_ok=True)
+        tmp = out_path + '.tmp'
+        cmd = [
+            ffmpeg,
+            '-hide_banner', '-loglevel', 'warning',
+            '-i', source_path,
+            '-c', 'copy',              # no transcoding
+            '-movflags', '+faststart',  # moov atom at front for streaming
+            '-f', 'mp4',
+            '-y', tmp,
+        ]
+        log(f'transmux: starting {os.path.basename(source_path)} -> {os.path.basename(out_path)}', 2)
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, timeout=300,  # 5-min timeout
+            )
+            if result.returncode != 0:
+                stderr = result.stderr.decode('utf-8', errors='replace')[:500]
+                log(f'transmux: ffmpeg copy failed (rc={result.returncode}): {stderr}', 1)
+                # Retry with transcoding — handles incompatible codecs
+                cmd_transcode = [
+                    ffmpeg,
+                    '-hide_banner', '-loglevel', 'warning',
+                    '-i', source_path,
+                    '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+                    '-c:a', 'aac', '-b:a', '192k',
+                    '-movflags', '+faststart',
+                    '-f', 'mp4',
+                    '-y', tmp,
+                ]
+                log('transmux: retrying with transcode (libx264 + aac)', 2)
+                result = subprocess.run(
+                    cmd_transcode, capture_output=True, timeout=3600,  # 1-hr timeout
+                )
+                if result.returncode != 0:
+                    stderr = result.stderr.decode('utf-8', errors='replace')[:500]
+                    log(f'transmux: transcode also failed: {stderr}', 0)
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+                    return None
+
+            os.replace(tmp, out_path)
+            size_mb = os.path.getsize(out_path) / (1024 * 1024)
+            log(f'transmux: done {os.path.basename(out_path)} ({size_mb:.1f} MB)', 2)
+            return out_path
+        except subprocess.TimeoutExpired:
+            log('transmux: ffmpeg timed out', 0)
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return None
+        except Exception as ex:
+            log(f'transmux: error: {ex}', 0)
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return None
+
+
 # HTTP handler ------------------------------------------------------------
 class CCHandler(BaseHTTPRequestHandler):
     server_version = 'CustomCutsHost/1.0'
@@ -557,9 +748,79 @@ class CCHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Headers', 'X-CC-Auth, Content-Type')
         self.send_header('Cache-Control', 'no-store')
         self.end_headers()
         self.wfile.write(data)
+
+    def do_OPTIONS(self):
+        # CORS preflight. Browser-hosted clients (e.g. the brs-engine Roku
+        # emulator) send this before any request carrying X-CC-Auth. Real
+        # Roku/Kodi never issue OPTIONS, so this is effectively emulator-only.
+        self.send_response(204)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, HEAD, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'X-CC-Auth, Content-Type')
+        self.send_header('Access-Control-Max-Age', '86400')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+    def _serve_local_file(self, filepath):
+        """Stream a local video file with Range support so Roku/Kodi can seek."""
+        import mimetypes
+        if not os.path.isfile(filepath):
+            self.send_error(404, 'local file not found')
+            return
+        try:
+            fsize = os.path.getsize(filepath)
+        except OSError as ex:
+            self.send_error(500, f'stat failed: {ex}')
+            return
+
+        ctype = mimetypes.guess_type(filepath)[0] or 'video/mp4'
+        range_hdr = self.headers.get('Range')
+
+        if range_hdr:
+            # Parse "bytes=start-end" — end is optional
+            try:
+                rng = range_hdr.replace('bytes=', '').strip()
+                parts = rng.split('-')
+                start = int(parts[0])
+                end = int(parts[1]) if parts[1] else fsize - 1
+            except (ValueError, IndexError):
+                self.send_error(416, 'bad range')
+                return
+            if start >= fsize or end >= fsize:
+                end = fsize - 1
+            length = end - start + 1
+            self.send_response(206)
+            self.send_header('Content-Range', f'bytes {start}-{end}/{fsize}')
+        else:
+            start = 0
+            length = fsize
+            self.send_response(200)
+
+        self.send_header('Content-Type', ctype)
+        self.send_header('Content-Length', str(length))
+        self.send_header('Accept-Ranges', 'bytes')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+
+        try:
+            with open(filepath, 'rb') as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = f.read(min(remaining, 65536))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # client disconnected mid-stream
+        except OSError as ex:
+            log(f'local file stream error: {ex}', 1)
 
     def _check_auth(self, plain=False):
         """Verify auth via X-CC-Auth header OR ?tok=<token> query param.
@@ -628,6 +889,27 @@ class CCHandler(BaseHTTPRequestHandler):
                 self._json(200, {'ok': True, 'version': v, 'lan_ip': get_lan_ip()})
                 return
 
+            if path == '/qr.png':
+                # Serves a QR code PNG encoding the phone-remote URL.
+                # Auth via ?tok= so Roku's Poster node can fetch it.
+                if not self._check_auth(plain=True): return
+                remote_url = build_remote_url()
+                if not remote_url:
+                    self.send_error(503, 'not hosting')
+                    return
+                png = build_remote_qr_png(remote_url)
+                if not png:
+                    self.send_error(500, 'QR generation failed (pip install qrcode pillow)')
+                    return
+                self.send_response(200)
+                self.send_header('Content-Type', 'image/png')
+                self.send_header('Content-Length', str(len(png)))
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                self.wfile.write(png)
+                return
+
             if path == '/commands':
                 if not self._check_auth(): return
                 qs = urlparse(self.path).query
@@ -654,6 +936,61 @@ class CCHandler(BaseHTTPRequestHandler):
                         'playlists': [dict(pl) for pl in _playlists_state['playlists']],
                     }
                 self._json(200, p)
+                return
+
+            if path == '/featured.json':
+                if not self._check_auth(): return
+                tok = _auth_token or ''
+                host = self.headers.get('Host') or f'{_server_bind}:{_server_port}'
+                def _enrich(entries):
+                    out = []
+                    for e in entries or []:
+                        url = e.get('url') or ''
+                        h = thumb_hash(url)
+                        out.append({
+                            'url': url,
+                            'title': e.get('title') or '',
+                            'thumb_path': f'/thumbs/{h}.jpg',
+                            'thumb_url': f'http://{host}/thumbs/{h}.jpg?tok={tok}',
+                            'thumb_exists': thumb_exists_for(url),
+                        })
+                    return out
+                with _state_lock:
+                    payload = {
+                        'version': _featured_state['version'],
+                        'classics': _enrich(_featured_state['classics']),
+                        'incoming': _enrich(_featured_state['incoming']),
+                    }
+                self._json(200, payload)
+                return
+
+            if path.startswith('/thumbs/'):
+                # Thumbs are fetched by Roku <Video>/<Poster> nodes which
+                # can't attach custom headers, so we allow the token via
+                # ?tok=. plain=True because a poster caller expects raw
+                # HTTP errors, not JSON.
+                if not self._check_auth(plain=True): return
+                name = path[len('/thumbs/'):]
+                if '/' in name or '\\' in name or not name.endswith('.jpg'):
+                    self.send_error(400, 'bad thumb name')
+                    return
+                full = os.path.join(THUMBS_DIR, name)
+                if not os.path.isfile(full):
+                    self.send_error(404, 'thumb not found')
+                    return
+                try:
+                    with open(full, 'rb') as f:
+                        data = f.read()
+                except OSError as ex:
+                    self.send_error(500, f'read failed: {ex}')
+                    return
+                self.send_response(200)
+                self.send_header('Content-Type', 'image/jpeg')
+                self.send_header('Content-Length', str(len(data)))
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Cache-Control', 'public, max-age=86400')
+                self.end_headers()
+                self.wfile.write(data)
                 return
 
             if path == '/state.json':
@@ -730,14 +1067,27 @@ class CCHandler(BaseHTTPRequestHandler):
                     self.send_error(404, 'entry not found')
                     return
                 try:
-                    r = resolve_video(entry_id, entry['url'])
+                    r = resolve_video(
+                        entry_id, entry['url'],
+                        local_path=entry.get('localPath'),
+                    )
                 except Exception as ex:
                     log(f'media resolve error: {ex}', 0)
                     self.send_error(502, f'resolve failed: {ex}')
                     return
-                self._proxy_stream(
-                    r['direct_url'], r['headers'], entry_id=entry_id,
-                )
+                if r.get('is_local'):
+                    # Transmux to a Roku-friendly MP4 so any container
+                    # (MKV, AVI, TS) and moov-atom-at-end MP4s work.
+                    # Falls back to raw serving if ffmpeg isn't available.
+                    transmuxed = transmux_local_file(entry_id, r['direct_url'])
+                    if transmuxed:
+                        self._serve_local_file(transmuxed)
+                    else:
+                        self._serve_local_file(r['direct_url'])
+                else:
+                    self._proxy_stream(
+                        r['direct_url'], r['headers'], entry_id=entry_id,
+                    )
                 return
 
             if path == '/hls':
@@ -778,6 +1128,30 @@ class CCHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path.startswith('/thumbs/'):
+            if not self._check_auth(): return
+            name = path[len('/thumbs/'):]
+            if '/' in name or '\\' in name or not name.endswith('.jpg'):
+                self._json(400, {'error': 'bad thumb name'})
+                return
+            length = int(self.headers.get('Content-Length', '0'))
+            if length <= 0 or length > 2 * 1024 * 1024:
+                self._json(400, {'error': 'empty or too-large body'})
+                return
+            body = self.rfile.read(length)
+            try:
+                os.makedirs(THUMBS_DIR, exist_ok=True)
+                full = os.path.join(THUMBS_DIR, name)
+                with open(full, 'wb') as f:
+                    f.write(body)
+            except OSError as ex:
+                log(f'thumb write failed: {ex}', 1)
+                self._json(500, {'error': f'write failed: {ex}'})
+                return
+            log(f'thumb stored: {name} ({length} bytes)', 2)
+            self._json(200, {'ok': True, 'name': name, 'bytes': length})
+            return
+
         if path == '/events':
             if not self._check_auth(): return
             length = int(self.headers.get('Content-Length', '0'))
@@ -848,7 +1222,8 @@ class CCHandler(BaseHTTPRequestHandler):
             # roku-host.js can run them.
             if cmd_name in (
                 'load_playlist', 'load_playlist_shuffled',
-                'queue_remove_url', 'rate_url',
+                'queue_remove_url', 'rate_url', 'play_queue',
+                'load_featured',
             ):
                 try:
                     send_message({
@@ -1101,6 +1476,11 @@ def start_hosting(port=8787, bind='0.0.0.0'):
             'port': _server_port, 'bind': _server_bind,
             'lan_ip': get_lan_ip(), 'already_running': True,
         }
+    for d in (THUMBS_DIR, TRANSMUX_DIR):
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError as ex:
+            log(f'start_hosting: could not create {d}: {ex}', 1)
     try:
         server = ThreadingHTTPServer((bind, port), CCHandler)
     except OSError as ex:
@@ -1171,6 +1551,22 @@ def set_playlists(playlists, version):
     }
 
 
+def set_featured(classics, incoming, version):
+    """Called via native messaging when playlists change. Only the two
+    exact-name featured playlists are sent with their full {url,title} lists;
+    /featured.json serves from this in-memory state."""
+    with _state_lock:
+        _featured_state['classics'] = list(classics or [])
+        _featured_state['incoming'] = list(incoming or [])
+        _featured_state['version'] = int(version or 0)
+    return {
+        'type': 'featured_set', 'ok': True,
+        'classics_count': len(_featured_state['classics']),
+        'incoming_count': len(_featured_state['incoming']),
+        'version': _featured_state['version'],
+    }
+
+
 def handle_command(msg):
     cmd = msg.get('cmd')
     if cmd == 'ping':
@@ -1187,6 +1583,12 @@ def handle_command(msg):
     if cmd == 'set_playlists':
         return set_playlists(
             msg.get('playlists', []), msg.get('version', 0),
+        )
+    if cmd == 'set_featured':
+        return set_featured(
+            msg.get('classics', []),
+            msg.get('incoming', []),
+            msg.get('version', 0),
         )
     if cmd == 'enqueue_command':
         seq = enqueue_command_internal(

@@ -687,7 +687,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'playNextInQueue':
       if (sender.tab && message.url) {
-        chrome.tabs.update(sender.tab.id, { url: message.url });
+        rokuHost.resolvePlayUrl(message.url).then(navUrl => {
+          chrome.tabs.update(sender.tab.id, { url: navUrl });
+        });
       }
       break;
 
@@ -710,6 +712,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'rokuPushPlaylists':
       rokuHost.pushCurrentPlaylists().then(sendResponse);
+      return true;
+
+    case 'resolvePlayUrl':
+      rokuHost.resolvePlayUrl(message.url).then(resolved => {
+        sendResponse(resolved);
+      });
+      return true;
+
+    case 'resolvePlayUrls':
+      rokuHost.resolvePlayUrls(message.urls || []).then(sendResponse);
+      return true;
+
+    case 'resolveCanonicalFromLocal':
+      rokuHost.resolveCanonicalFromLocal(message.url || '').then(sendResponse);
+      return true;
+
+    case 'featuredCaptureRequest':
+      // Content script reached 30s on a featured-playlist video and either
+      // captured the frame (dataUrl set) or failed with a taint error
+      // (dataUrl null → fall back to captureVisibleTab).
+      rokuHost.handleFeaturedCaptureRequest(
+        message.url, message.dataUrl || null, sender.tab?.id,
+      ).then(sendResponse);
       return true;
 
     case 'rokuEnqueueCommand':
@@ -1007,7 +1032,15 @@ async function queueSkipToNext() {
   if (!tab) return;
   const { videoQueue = [] } = await chrome.storage.local.get('videoQueue');
   if (videoQueue.length === 0) return;
-  const idx = videoQueue.findIndex(v => v.url === tab.url);
+
+  // Resolve canonical URL in case we're on a file:// or localhost page
+  let tabUrl = tab.url;
+  if (tabUrl.startsWith('file://')) {
+    const c = await rokuHost.resolveCanonicalFromLocal(tabUrl);
+    if (c) tabUrl = c;
+  }
+
+  const idx = videoQueue.findIndex(v => v.url === tabUrl);
   let target = null;
   if (idx >= 0 && idx < videoQueue.length - 1) {
     target = videoQueue[idx + 1];
@@ -1015,7 +1048,8 @@ async function queueSkipToNext() {
     target = videoQueue[0];
   }
   if (target) {
-    await chrome.tabs.update(tab.id, { url: target.url });
+    const navUrl = await rokuHost.resolvePlayUrl(target.url);
+    await chrome.tabs.update(tab.id, { url: navUrl });
   }
 }
 
@@ -1122,7 +1156,15 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     await chrome.storage.sync.set({ settings: DEFAULT_SETTINGS });
     console.log('Custom Cuts installed with default settings');
   }
+  // Rebuild the local-path reverse index on install/update
+  rokuHost.rebuildLocalPathIndex().catch(e =>
+    console.error('[background] rebuildLocalPathIndex failed:', e));
 });
+
+// Rebuild local-path index on every service worker startup so it's warm
+// before the first file:// page triggers a lookup.
+rokuHost.rebuildLocalPathIndex().catch(e =>
+  console.error('[background] rebuildLocalPathIndex failed:', e));
 
 // Alarm handler to keep service worker alive
 chrome.alarms.onAlarm.addListener((alarm) => {

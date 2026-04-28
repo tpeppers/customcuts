@@ -11,6 +11,7 @@ We still run a monitor loop for:
   - /events posting (now-playing display)
   - Detecting the end of the playlist so the addon can exit cleanly
 """
+import os
 import time
 
 import xbmc
@@ -115,17 +116,31 @@ class PlaybackController:
     def _build_playlist(self):
         self.playlist.clear()
         for i, entry in enumerate(self.queue):
-            url = entry.get('play_url') or entry.get('url') or ''
+            # Prefer local file when available — no network round-trip,
+            # better seeking, and works even if the host is unreachable.
+            local = entry.get('localPath') or ''
+            if local and os.path.isfile(local):
+                url = local
+                log(f'queue[{i}] using local file: {local}')
+            else:
+                url = entry.get('play_url') or entry.get('url') or ''
             if not url:
                 continue
             title = entry.get('title') or f'Video {i + 1}'
+            is_local = (url == local)
+            source_label = f'Local: {local}' if is_local else entry.get('url') or url
             li = xbmcgui.ListItem(title)
             try:
                 info = li.getVideoInfoTag()
                 info.setTitle(title)
+                info.setPlot(f'Source: {source_label}')
+                info.setPath(url)
             except Exception:
                 try:
-                    li.setInfo('video', {'title': title})
+                    li.setInfo('video', {
+                        'title': title,
+                        'plot': f'Source: {source_label}',
+                    })
                 except Exception:
                     pass
             self.playlist.add(url, li)

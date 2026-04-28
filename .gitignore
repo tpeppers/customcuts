@@ -15,6 +15,16 @@ native_host/stream_host_manifest.json
 # Kodi addon build artifact (regenerated from customcuts-kodi/ on demand)
 customcuts-kodi.zip
 
+# Roku channel build artifact (regenerated from customcuts-roku/ on demand)
+customcuts-roku.zip
+
+# Native host generated caches (thumbnails for featured grid, transmuxed MP4s)
+native_host/thumbs/
+native_host/transmux_cache/
+
+# Local test environment scaffolding (BrightScript desktop sim, etc.)
+test_env/
+
 # Generated data-source reference audit (not for publication)
 DATASOURCE_REFS.txt
 

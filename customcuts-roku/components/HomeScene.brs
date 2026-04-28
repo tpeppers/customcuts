@@ -15,16 +15,28 @@ sub init()
     m.titleLabel = m.top.findNode("titleLabel")
     m.statusLabel = m.top.findNode("statusLabel")
     m.queueList = m.top.findNode("queueList")
+    m.featuredRows = m.top.findNode("featuredRows")
     m.videoPlayer = m.top.findNode("videoPlayer")
     m.queueTask = m.top.findNode("queueTask")
     m.cmdTask = m.top.findNode("cmdTask")
     m.eventTask = m.top.findNode("eventTask")
     m.discoveryTask = m.top.findNode("discoveryTask")
+    m.featuredTask = m.top.findNode("featuredTask")
+    m.postCommandTask = m.top.findNode("postCommandTask")
     m.cmdTimer = m.top.findNode("cmdTimer")
     m.eventTimer = m.top.findNode("eventTimer")
     m.progressGroup = m.top.findNode("progressGroup")
     m.progressBarFill = m.top.findNode("progressBarFill")
     m.progressTimeLabel = m.top.findNode("progressTimeLabel")
+    m.qrOverlay = m.top.findNode("qrOverlay")
+    m.qrPoster = m.top.findNode("qrPoster")
+    m.qrUrlLabel = m.top.findNode("qrUrlLabel")
+    m.seekOverlay = m.top.findNode("seekOverlay")
+    m.seekTitleLabel = m.top.findNode("seekTitleLabel")
+    m.seekTimeLabel = m.top.findNode("seekTimeLabel")
+    m.seekPctLabel = m.top.findNode("seekPctLabel")
+    m.seekBarFill = m.top.findNode("seekBarFill")
+    m.seekHideTimer = m.top.findNode("seekHideTimer")
 
     m.queue = []
     m.currentIndex = -1
@@ -36,27 +48,117 @@ sub init()
     m.authToken = ""
     m.queueFailureCount = 0
     m.commandFailureCount = 0
+    m.playlists = []
+    m.playlistMode = false
+    m.connected = false
+    m.connectTimer = m.top.findNode("connectTimer")
 
     m.queueList.observeField("itemSelected", "onQueueItemSelected")
+    m.featuredRows.observeField("rowItemSelected", "onFeaturedSelected")
     m.videoPlayer.observeField("state", "onVideoState")
     m.videoPlayer.observeField("position", "onVideoPosition")
     m.queueTask.observeField("result", "onQueueFetched")
     m.cmdTask.observeField("result", "onCommandsFetched")
+    m.featuredTask.observeField("result", "onFeaturedFetched")
     m.discoveryTask.observeField("done", "onDiscoveryDone")
     m.cmdTimer.observeField("fire", "onCmdTimer")
     m.eventTimer.observeField("fire", "onEventTimer")
+    m.connectTimer.observeField("fire", "onConnectTimeout")
+    m.seekHideTimer.observeField("fire", "onSeekHideTimer")
+    m.videoPlayer.enableTrickPlay = false
 
     m.top.setFocus(true)
+
+    ' Default host/token used when no host has been saved to registry yet.
+    ' Once the user manually enters a host via the keyboard dialog, that
+    ' overrides this default in the registry for all future launches.
+    DEFAULT_HOST = "http://192.168.254.76:8787"
+    DEFAULT_TOKEN = "7b7ff70ab148f759487a7083eff1e497"
 
     m.hostUrl = loadHostUrl()
     m.authToken = loadAuthToken()
     if m.hostUrl = "" then
-        runDiscovery()
-    else
-        m.statusLabel.text = "Host: " + m.hostUrl
-        startPollers()
-        fetchQueue()
+        m.hostUrl = DEFAULT_HOST
+        m.authToken = DEFAULT_TOKEN
+        saveHostUrl(DEFAULT_HOST)
+        saveAuthToken(DEFAULT_TOKEN)
     end if
+
+    m.statusLabel.text = "Connecting to " + m.hostUrl + "..."
+    m.connectTimer.control = "start"
+    startPollers()
+    fetchQueue()
+    fetchFeatured()
+end sub
+
+sub onConnectTimeout()
+    if m.connected then return
+    m.statusLabel.text = "Connection timed out. Enter host manually."
+    showHostSetup(m.hostUrl)
+end sub
+
+' Featured rows ----------------------------------------------------------
+sub fetchFeatured()
+    m.featuredTask.hostUrl = m.hostUrl
+    m.featuredTask.authToken = m.authToken
+    m.featuredTask.control = "RUN"
+end sub
+
+sub onFeaturedFetched()
+    result = m.featuredTask.result
+    if result = invalid then return
+    if result.error <> invalid and result.error <> "" then
+        print "featured fetch error: "; result.error
+        return
+    end if
+
+    classics = result.classics
+    incoming = result.incoming
+    if classics = invalid then classics = []
+    if incoming = invalid then incoming = []
+
+    ' Build the RowList content: one row per bucket, each row's children
+    ' are ContentNodes with title + HDPosterUrl pointing to /thumbs/*.jpg.
+    root = CreateObject("roSGNode", "ContentNode")
+
+    classicsRow = root.createChild("ContentNode")
+    classicsRow.title = "Featured — Classics"
+    populateFeaturedRow(classicsRow, classics)
+
+    incomingRow = root.createChild("ContentNode")
+    incomingRow.title = "Featured — Incoming"
+    populateFeaturedRow(incomingRow, incoming)
+
+    m.featuredRows.content = root
+    if classics.count() > 0 or incoming.count() > 0 then
+        m.featuredRows.visible = true
+    end if
+end sub
+
+sub populateFeaturedRow(rowNode as object, items as object)
+    for i = 0 to items.count() - 1
+        e = items[i]
+        node = rowNode.createChild("ContentNode")
+        node.title = e.title
+        if e.thumb_url <> invalid and e.thumb_exists = true then
+            node.HDPosterUrl = e.thumb_url
+            node.SDPosterUrl = e.thumb_url
+        end if
+    end for
+end sub
+
+sub onFeaturedSelected()
+    sel = m.featuredRows.rowItemSelected
+    if sel = invalid then return
+    rowIdx = sel[0]
+    colIdx = sel[1]
+
+    bucket = "classics"
+    if rowIdx = 1 then bucket = "incoming"
+
+    args = "{""bucket"":""" + bucket + """,""start_index"":" + colIdx.toStr() + "}"
+    postRemoteCommand("load_featured", args)
+    m.statusLabel.text = "Loading featured " + bucket + " from #" + (colIdx + 1).toStr() + "..."
 end sub
 
 ' LAN discovery -----------------------------------------------------------
@@ -116,6 +218,7 @@ sub onDiscoveryDone()
         m.commandFailureCount = 0
         startPollers()
         fetchQueue()
+        fetchFeatured()
     else
         m.statusLabel.text = "No host found. Enter address manually."
         showHostSetup("192.168.1.100:8787")
@@ -176,6 +279,7 @@ sub onHostDialogButton()
         m.commandFailureCount = 0
         startPollers()
         fetchQueue()
+        fetchFeatured()
     else
         m.top.dialog = invalid
         m.hostDialog = invalid
@@ -235,14 +339,27 @@ sub onQueueFetched()
     end if
 
     m.queueFailureCount = 0
+    m.connected = true
+    m.connectTimer.control = "stop"
     m.queue = result.queue
 
-    ' Build the LabelList content: a [Change Host] row at index 0, then
-    ' the actual queue. playIndex() still takes a queue-relative index, so
-    ' onQueueItemSelected subtracts 1.
+    m.playlistMode = false
+    renderQueueList()
+end sub
+
+sub renderQueueList()
+    ' Build the LabelList content:
+    '   [0] Change Host
+    '   [1] Browse Playlists
+    '   [2] Show QR Code
+    '   [3..] queue items
     items = CreateObject("roSGNode", "ContentNode")
     changeHostItem = items.createChild("ContentNode")
     changeHostItem.title = "[Change Host]"
+    playlistItem = items.createChild("ContentNode")
+    playlistItem.title = "[Browse Playlists]"
+    qrItem = items.createChild("ContentNode")
+    qrItem.title = "[Show QR Code]"
     for i = 0 to m.queue.count() - 1
         entry = m.queue[i]
         item = items.createChild("ContentNode")
@@ -253,7 +370,7 @@ sub onQueueFetched()
     m.queueList.setFocus(true)
 
     if m.queue.count() = 0 then
-        m.statusLabel.text = "Queue is empty. Play a playlist in the extension."
+        m.statusLabel.text = "Queue is empty. Browse playlists or use the extension."
     else
         m.statusLabel.text = m.queue.count().toStr() + " videos in queue. Press OK to play."
     end if
@@ -261,11 +378,128 @@ end sub
 
 sub onQueueItemSelected()
     idx = m.queueList.itemSelected
+
+    if m.playlistMode then
+        handlePlaylistSelection(idx)
+        return
+    end if
+
     if idx = 0 then
         showHostSetup(m.hostUrl)
         return
     end if
-    playIndex(idx - 1)
+    if idx = 1 then
+        showPlaylistPicker()
+        return
+    end if
+    if idx = 2 then
+        showQrCode()
+        return
+    end if
+    playIndex(idx - 3)
+end sub
+
+' Playlist picker ---------------------------------------------------------
+sub showPlaylistPicker()
+    m.statusLabel.text = "Fetching playlists..."
+    m.queueTask.hostUrl = m.hostUrl
+    m.queueTask.authToken = m.authToken
+
+    req = CreateObject("roUrlTransfer")
+    req.setUrl(m.hostUrl + "/playlists.json")
+    req.setCertificatesFile("common:/certs/ca-bundle.crt")
+    req.initClientCertificates()
+    req.retainBodyOnError(true)
+    req.addHeader("Accept", "application/json")
+    if m.authToken <> invalid and m.authToken <> "" then
+        req.addHeader("X-CC-Auth", m.authToken)
+    end if
+
+    ' This runs on the render thread so it blocks briefly — acceptable for
+    ' a short JSON fetch. Tasks can't easily return to a callback flow here
+    ' because we need to swap the list synchronously.
+    body = req.getToString()
+    if body = invalid or body = "" then
+        m.statusLabel.text = "Couldn't load playlists."
+        return
+    end if
+    parsed = ParseJson(body)
+    if parsed = invalid or parsed.playlists = invalid then
+        m.statusLabel.text = "Couldn't parse playlists."
+        return
+    end if
+
+    m.playlists = parsed.playlists
+    m.playlistMode = true
+
+    items = CreateObject("roSGNode", "ContentNode")
+    backItem = items.createChild("ContentNode")
+    backItem.title = "[Back to Queue]"
+    for i = 0 to m.playlists.count() - 1
+        pl = m.playlists[i]
+        item = items.createChild("ContentNode")
+        plName = pl.name
+        if plName = invalid or plName = "" then plName = "(untitled)"
+        plCount = 0
+        if pl.video_count <> invalid then plCount = pl.video_count
+        item.title = plName + "  (" + plCount.toStr() + " videos)"
+    end for
+
+    ' Add shuffle variants
+    for i = 0 to m.playlists.count() - 1
+        pl = m.playlists[i]
+        item = items.createChild("ContentNode")
+        plName = pl.name
+        if plName = invalid or plName = "" then plName = "(untitled)"
+        item.title = plName + "  [Shuffle]"
+    end for
+
+    m.queueList.content = items
+    m.queueList.visible = true
+    m.queueList.setFocus(true)
+    m.statusLabel.text = m.playlists.count().toStr() + " playlists available."
+end sub
+
+sub handlePlaylistSelection(idx as integer)
+    if idx = 0 then
+        m.playlistMode = false
+        renderQueueList()
+        return
+    end if
+
+    plCount = m.playlists.count()
+
+    if idx >= 1 and idx <= plCount then
+        ' Normal (unshuffled) playlist selection
+        plIdx = idx - 1
+        pl = m.playlists[plIdx]
+        plIndex = plIdx
+        if pl.index <> invalid then plIndex = pl.index
+        m.statusLabel.text = "Loading " + pl.name + "..."
+        postRemoteCommand("load_playlist", "{""index"":" + plIndex.toStr() + "}")
+        m.playlistMode = false
+        return
+    end if
+
+    if idx > plCount and idx <= plCount * 2 then
+        ' Shuffle selection
+        plIdx = idx - plCount - 1
+        pl = m.playlists[plIdx]
+        plIndex = plIdx
+        if pl.index <> invalid then plIndex = pl.index
+        m.statusLabel.text = "Loading " + pl.name + " (shuffled)..."
+        postRemoteCommand("load_playlist_shuffled", "{""index"":" + plIndex.toStr() + "}")
+        m.playlistMode = false
+        return
+    end if
+end sub
+
+sub postRemoteCommand(cmdName as string, argsJson as string)
+    m.postCommandTask.hostUrl = m.hostUrl
+    m.postCommandTask.authToken = m.authToken
+    m.postCommandTask.cmdName = cmdName
+    m.postCommandTask.argsJson = argsJson
+    m.postCommandTask.control = "RUN"
 end sub
 
 sub playIndex(idx as integer)
@@ -351,20 +585,20 @@ end function
 ' Video playback observers ------------------------------------------------
 sub onVideoPosition()
     if m.cutsState = invalid then return
-    pos = m.videoPlayer.position
+    curPos = m.videoPlayer.position
 
     ' Drive on-TV progress bar whenever position updates
     dur = m.videoPlayer.duration
     if dur > 0 then
-        pct = pos / dur
+        pct = curPos / dur
         if pct < 0 then pct = 0
         if pct > 1 then pct = 1
-        m.progressBarFill.width = Int(1800 * pct)
-        m.progressTimeLabel.text = formatTimeSec(pos) + " / " + formatTimeSec(dur)
+        m.progressBarFill.width = Int(1740 * pct)
+        m.progressTimeLabel.text = formatTimeSec(curPos) + " / " + formatTimeSec(dur)
     end if
 
     if m.cutsState.queueEndTime > 0 and not m.cutsState.queueEndTriggered then
-        if pos >= m.cutsState.queueEndTime then
+        if curPos >= m.cutsState.queueEndTime then
             m.cutsState.queueEndTriggered = true
             advanceQueue()
             return
@@ -375,7 +609,7 @@ sub onVideoPosition()
 
     if mode = "skip" then
         for each r in m.cutsState.skip
-            if pos >= r.start and pos < r.end then
+            if curPos >= r.start and curPos < r.end then
                 m.videoPlayer.seek = r.end
                 return
             end if
@@ -387,11 +621,11 @@ sub onVideoPosition()
         inRange = false
         nextStart = -1
         for each r in m.cutsState.only
-            if pos >= r.start and pos < r.end then
+            if curPos >= r.start and curPos < r.end then
                 inRange = true
                 exit for
             end if
-            if r.start > pos then
+            if r.start > curPos then
                 if nextStart < 0 or r.start < nextStart then nextStart = r.start
             end if
         end for
@@ -409,11 +643,11 @@ sub onVideoPosition()
         inRange = false
         nextStart = -1
         for each r in m.cutsState.loop
-            if pos >= r.start and pos < r.end then
+            if curPos >= r.start and curPos < r.end then
                 inRange = true
                 exit for
             end if
-            if r.start > pos then
+            if r.start > curPos then
                 if nextStart < 0 or r.start < nextStart then nextStart = r.start
             end if
         end for
@@ -506,13 +740,14 @@ sub dispatchCommand(c as object)
     else if cmd = "prev" then
         previousQueue()
     else if cmd = "seek" then
-        if args.position <> invalid then m.videoPlayer.seek = args.position
+        if args.position <> invalid then
+            m.videoPlayer.seek = args.position
+            showSeekOverlay(0)
+        end if
     else if cmd = "seek_delta" then
         delta = 0
         if args.delta <> invalid then delta = args.delta
-        newPos = m.videoPlayer.position + delta
-        if newPos < 0 then newPos = 0
-        m.videoPlayer.seek = newPos
+        doSeek(delta)
     else if cmd = "pause" then
         m.videoPlayer.control = "pause"
     else if cmd = "resume" then
@@ -521,8 +756,11 @@ sub dispatchCommand(c as object)
         m.videoPlayer.control = "stop"
     else if cmd = "play_index" then
         if args.index <> invalid then playIndex(args.index)
+    else if cmd = "play_queue" then
+        if m.queue.count() > 0 then playIndex(0)
     else if cmd = "refresh_queue" then
         fetchQueue()
+        fetchFeatured()
     else if cmd = "change_host" then
         showHostSetup(m.hostUrl)
     end if
@@ -554,3 +792,127 @@ sub reportEvent(eventType as string)
     m.eventTask.event = ev
     m.eventTask.control = "RUN"
 end sub
+
+' QR code overlay ---------------------------------------------------------
+sub showQrCode()
+    if m.hostUrl = "" then
+        m.statusLabel.text = "Not connected to a host."
+        return
+    end if
+    ' Build the QR PNG URL — the host serves /qr.png with ?tok= auth
+    tok = m.authToken
+    if tok = invalid then tok = ""
+    qrUrl = m.hostUrl + "/qr.png?tok=" + tok
+    m.qrPoster.uri = qrUrl
+
+    ' Show the remote URL for reference
+    remoteUrl = m.hostUrl + "/remote#tok=" + tok
+    m.qrUrlLabel.text = remoteUrl
+
+    m.qrOverlay.visible = true
+end sub
+
+sub hideQrCode()
+    m.qrOverlay.visible = false
+    m.qrPoster.uri = ""
+    m.queueList.setFocus(true)
+end sub
+
+' Seek overlay ------------------------------------------------------------
+function formatTimeHMS(sec as float) as string
+    if sec < 0 then sec = 0
+    total = Int(sec)
+    hh = total \ 3600
+    mm = (total - hh * 3600) \ 60
+    ss = total mod 60
+    if hh > 0 then
+        return hh.toStr() + ":" + right("0" + mm.toStr(), 2) + ":" + right("0" + ss.toStr(), 2)
+    end if
+    return mm.toStr() + ":" + right("0" + ss.toStr(), 2)
+end function
+
+sub showSeekOverlay(delta as integer)
+    curPos = m.videoPlayer.position
+    dur = m.videoPlayer.duration
+    if dur <= 0 then dur = 1
+
+    ' Show what the seek delta was
+    if delta > 0 then
+        m.seekTitleLabel.text = ">> +" + formatTimeHMS(delta)
+    else if delta < 0 then
+        m.seekTitleLabel.text = "<< " + formatTimeHMS(delta)
+    else
+        m.seekTitleLabel.text = ""
+    end if
+
+    m.seekTimeLabel.text = formatTimeHMS(curPos) + " / " + formatTimeHMS(dur)
+
+    pct = curPos / dur
+    if pct < 0 then pct = 0
+    if pct > 1 then pct = 1
+    m.seekPctLabel.text = Int(pct * 100).toStr() + "%"
+    m.seekBarFill.width = Int(880 * pct)
+
+    m.seekOverlay.visible = true
+    m.seekHideTimer.control = "stop"
+    m.seekHideTimer.control = "start"
+end sub
+
+sub onSeekHideTimer()
+    m.seekOverlay.visible = false
+end sub
+
+sub doSeek(deltaSec as integer)
+    newPos = m.videoPlayer.position + deltaSec
+    if newPos < 0 then newPos = 0
+    m.videoPlayer.seek = newPos
+    showSeekOverlay(deltaSec)
+end sub
+
+' Key handling ------------------------------------------------------------
+function onKeyEvent(key as string, press as boolean) as boolean
+    if not press then return false
+
+    if key = "back" and m.qrOverlay.visible then
+        hideQrCode()
+        return true
+    end if
+
+    if m.videoPlayer.visible then
+        if key = "back" then
+            m.videoPlayer.control = "stop"
+            m.videoPlayer.visible = false
+            m.progressGroup.visible = false
+            m.seekOverlay.visible = false
+            m.statusLabel.text = m.queue.count().toStr() + " videos in queue. Press OK to play."
+            m.queueList.setFocus(true)
+            reportEvent("state_change")
+            return true
+        end if
+        if key = "right" then
+            doSeek(30)
+            return true
+        end if
+        if key = "left" then
+            doSeek(-30)
+            return true
+        end if
+        if key = "fastforward" then
+            doSeek(60)
+            return true
+        end if
+        if key = "rewind" then
+            doSeek(-60)
+            return true
+        end if
+        if key = "play" then
+            if m.videoPlayer.state = "paused" then
+                m.videoPlayer.control = "resume"
+            else
+                m.videoPlayer.control = "pause"
+            end if
+            return true
+        end if
+    end if
+    return false
+end function

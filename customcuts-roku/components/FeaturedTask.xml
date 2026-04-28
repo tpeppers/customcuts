@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="FeaturedTask" extends="Task">
+    <script type="text/brightscript" uri="FeaturedTask.brs" />
+    <interface>
+        <field id="hostUrl" type="string" />
+        <field id="authToken" type="string" value="" />
+        <field id="result" type="assocarray" />
+    </interface>
+</component>

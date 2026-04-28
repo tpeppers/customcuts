@@ -193,12 +193,22 @@ def pick_playlist_and_load(api):
                    xbmcgui.NOTIFICATION_ERROR, 5000)
             playlists = []
 
+        try:
+            featured = api.get_featured() or {}
+        except ApiError:
+            featured = {}
+        classics_count = len(featured.get('classics') or [])
+        incoming_count = len(featured.get('incoming') or [])
+
         saved = load_settings()
         host_url = saved['host_url'] or '(unknown)'
 
         labels = [
             f'[B]{ADDON.getLocalizedString(30014) or "Play current queue"}[/B]',
+            f'[B]★ Browse Featured — Classics  ({classics_count} videos)[/B]',
+            f'[B]★ Browse Featured — Incoming  ({incoming_count} videos)[/B]',
         ]
+        FIRST_PLAYLIST = len(labels)
         for p in playlists:
             name = p.get('name') or '(untitled)'
             count = p.get('video_count', 0)
@@ -224,10 +234,22 @@ def pick_playlist_and_load(api):
         if idx == 0:
             return api, _fetch_queue(api)  # play current queue
 
+        if idx == 1:
+            queue = _browse_featured_and_load(api, featured, 'classics')
+            if queue is None:
+                continue  # user cancelled the grid; re-show the picker
+            return api, queue
+
+        if idx == 2:
+            queue = _browse_featured_and_load(api, featured, 'incoming')
+            if queue is None:
+                continue
+            return api, queue
+
         if idx < first_action:
             # Chose a playlist
-            pl = playlists[idx - 1]
-            pl_index = pl.get('index', idx - 1)
+            pl = playlists[idx - FIRST_PLAYLIST]
+            pl_index = pl.get('index', idx - FIRST_PLAYLIST)
             queue = _load_playlist_and_wait(api, pl_index, pl.get('name', ''))
             return api, queue
 
@@ -263,6 +285,67 @@ def pick_playlist_and_load(api):
                 return None, None
             api = new_api
             continue
+
+
+def _browse_featured_and_load(api, featured, bucket):
+    """Show a thumbnail-grid picker for one of the two featured buckets.
+    On selection, ask the extension (via load_featured) to install the
+    sliced list as videoQueue, then wait for /state.json to report a new
+    queue version before fetching /queue.json. Returns the queue entries
+    or None if the user cancelled (caller will re-show the top picker)."""
+    items = (featured or {}).get(bucket) or []
+    if not items:
+        notify(f'No "{bucket}" videos yet — tag a playlist to add some.',
+               xbmcgui.NOTIFICATION_WARNING)
+        return None
+
+    pretty_bucket = 'Classics' if bucket == 'classics' else 'Incoming'
+    listitems = []
+    for v in items:
+        title = v.get('title') or v.get('url') or '(untitled)'
+        li = xbmcgui.ListItem(label=title)
+        thumb = v.get('thumb_url') or ''
+        if thumb and v.get('thumb_exists'):
+            li.setArt({'thumb': thumb, 'poster': thumb, 'icon': thumb})
+        listitems.append(li)
+
+    dlg = xbmcgui.Dialog()
+    idx = dlg.select(
+        f'Featured — {pretty_bucket}  ({len(items)} videos)',
+        listitems,
+        useDetails=True,
+    )
+    if idx < 0:
+        return None  # user cancelled
+
+    notify(f'Loading "{pretty_bucket}" from #{idx + 1}...')
+    try:
+        prev_state = api.get_state() or {}
+        prev_version = int(prev_state.get('queue_version', 0) or 0)
+    except ApiError:
+        prev_version = 0
+
+    try:
+        api.post_command('load_featured', {
+            'bucket': bucket,
+            'start_index': idx,
+        })
+    except ApiError as e:
+        notify(f'Failed to load featured: {e}', xbmcgui.NOTIFICATION_ERROR)
+        return []
+
+    monitor = xbmc.Monitor()
+    deadline = time.time() + 6.0
+    while time.time() < deadline:
+        if monitor.waitForAbort(0.3):
+            return []
+        try:
+            state = api.get_state() or {}
+            if int(state.get('queue_version', 0) or 0) > prev_version:
+                break
+        except ApiError:
+            continue
+    return _fetch_queue(api)
 
 
 def _load_playlist_and_wait(api, pl_index, pl_name):

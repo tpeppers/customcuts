@@ -188,6 +188,7 @@ body {
     <button class="btn small" data-cmd="ff-30">+30m</button>
   </div>
   <div class="btn-row">
+    <button class="btn small" data-cmd="play-queue">Play queue</button>
     <button class="btn small" data-cmd="refresh">Refresh queue</button>
     <button class="btn small danger" data-cmd="stop">Stop</button>
     <button class="btn small danger" data-cmd="remove">Remove</button>
@@ -591,6 +592,7 @@ body {
       case 'vote-skip': return handleVoteSkip();
       case 'veto': return handleVeto();
       case 'refresh': return sendCommand('refresh_queue');
+      case 'play-queue': return sendCommand('play_queue');
       // Phone remote seek buttons step in MINUTES — player seek_delta is
       // in seconds, so multiply by 60 on the way out.
       case 'rw-30': return sendCommand('seek_delta', { delta: -30 * 60 });

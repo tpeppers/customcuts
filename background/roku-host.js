@@ -10,10 +10,14 @@
 
 const HOST_NAME = 'com.customcuts.stream_host';
 
+const FEATURED_CLASSICS_NAME = 'Featured Videos - Classics';
+const FEATURED_INCOMING_NAME = 'Featured Videos - Incoming';
+
 let nativePort = null;
 let pendingResolvers = [];
 let queueVersion = 0;
 let playlistsVersion = 0;
+let featuredVersion = 0;
 let lastStatus = {
   hosting: false,
   port: null,
@@ -62,6 +66,11 @@ function handleHostMessage(msg) {
     lastStatus.bind = msg.bind;
     lastStatus.lan_ip = msg.lan_ip || lastStatus.lan_ip;
     if (msg.auth_token) lastStatus.auth_token = msg.auth_token;
+    // Persist so resolvePlayUrl works after service-worker restart
+    chrome.storage.local.set({
+      _hostPort: msg.port,
+      _hostToken: msg.auth_token || '',
+    }).catch(() => {});
   } else if (msg?.type === 'hosting_stopped') {
     lastStatus.hosting = false;
     lastStatus.port = null;
@@ -207,13 +216,18 @@ export async function buildQueuePayload() {
     const videoId = 'video_' + v.url;
     const vdData = await chrome.storage.local.get(videoId);
     const vd = vdData[videoId] || {};
-    out.push({
+    // TITLE tag override: if a TITLE tag exists, use its titleText as
+    // the display title. This propagates to /queue.json → Roku/Kodi/phone.
+    const titleTag = (vd.tags || []).find(t => t.name === 'TITLE' && t.titleText);
+    const entry = {
       id: slugId(v.url),
-      title: v.title || v.url,
+      title: titleTag ? titleTag.titleText : (v.title || v.url),
       url: v.url,
       cuts: { ...cuts, startMode, endMode },
       ratings: vd.ratings || {},
-    });
+    };
+    if (vd.localPath) entry.localPath = vd.localPath;
+    out.push(entry);
   }
   return out;
 }
@@ -305,7 +319,160 @@ export async function pushCurrentPlaylists() {
     { cmd: 'set_playlists', playlists: payload, version: playlistsVersion },
     'playlists_set',
   );
+  // Piggy-back on playlist changes: whenever the summarized list changes,
+  // the featured lists might have changed too, so push them as well.
+  pushCurrentFeatured().catch(e =>
+    console.error('[roku-host] pushCurrentFeatured failed', e));
   return { ...resp, count: payload.length };
+}
+
+async function buildFeaturedPayload() {
+  const data = await chrome.storage.local.get('playlists');
+  const playlists = Array.isArray(data.playlists) ? data.playlists : [];
+  const pick = (name) => {
+    const pl = playlists.find(p => p?.name === name);
+    if (!pl || !Array.isArray(pl.videos)) return [];
+    return pl.videos.map(v => ({ url: v.url, title: v.title || '' }));
+  };
+  return {
+    classics: pick(FEATURED_CLASSICS_NAME),
+    incoming: pick(FEATURED_INCOMING_NAME),
+  };
+}
+
+export async function pushCurrentFeatured() {
+  if (!nativePort) return { ok: false, error: 'not hosting' };
+  const payload = await buildFeaturedPayload();
+  featuredVersion += 1;
+  const resp = await sendCommand(
+    {
+      cmd: 'set_featured',
+      classics: payload.classics,
+      incoming: payload.incoming,
+      version: featuredVersion,
+    },
+    'featured_set',
+  );
+  return {
+    ...resp,
+    classics_count: payload.classics.length,
+    incoming_count: payload.incoming.length,
+  };
+}
+
+// Cache of URLs we've already uploaded a thumbnail for this session —
+// avoids re-POSTing the same image on every 30s tick.
+const _uploadedThumbs = new Set();
+
+function hostBaseUrl() {
+  const port = lastStatus.port;
+  if (!port) return null;
+  return `http://127.0.0.1:${port}`;
+}
+
+async function isFeaturedUrl(url) {
+  if (!url) return false;
+  const { classics, incoming } = await buildFeaturedPayload();
+  return (
+    classics.some(v => v.url === url) ||
+    incoming.some(v => v.url === url)
+  );
+}
+
+async function thumbExistsOnHost(url) {
+  const base = hostBaseUrl();
+  if (!base) return false;
+  const hash = await sha1Hex(url);
+  const token = lastStatus.auth_token || '';
+  try {
+    const resp = await fetch(
+      `${base}/thumbs/${hash}.jpg?tok=${encodeURIComponent(token)}`,
+      { method: 'HEAD' },
+    );
+    return resp.ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function sha1Hex(str) {
+  const buf = new TextEncoder().encode(str);
+  const digest = await crypto.subtle.digest('SHA-1', buf);
+  const hex = Array.from(new Uint8Array(digest))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+  return hex.slice(0, 16);  // must match thumb_hash() in customcuts_host.py
+}
+
+function dataUrlToBlob(dataUrl) {
+  const comma = dataUrl.indexOf(',');
+  if (comma < 0) return null;
+  const meta = dataUrl.slice(5, comma);  // skip "data:"
+  const isBase64 = meta.endsWith(';base64');
+  const mime = isBase64 ? meta.slice(0, -7) : meta;
+  const payload = dataUrl.slice(comma + 1);
+  const bin = isBase64 ? atob(payload) : decodeURIComponent(payload);
+  const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  return new Blob([buf], { type: mime || 'image/jpeg' });
+}
+
+export async function uploadFeaturedThumb(url, dataUrl) {
+  if (!url || !dataUrl) return { ok: false, error: 'missing url or dataUrl' };
+  if (_uploadedThumbs.has(url)) return { ok: true, cached: true };
+  const base = hostBaseUrl();
+  if (!base) return { ok: false, error: 'not hosting' };
+  // Skip if the host already has this thumb — saves a round trip and
+  // preserves "first screenshot wins" semantics across sessions.
+  if (await thumbExistsOnHost(url)) {
+    _uploadedThumbs.add(url);
+    return { ok: true, alreadyOnHost: true };
+  }
+  const blob = dataUrlToBlob(dataUrl);
+  if (!blob) return { ok: false, error: 'bad dataUrl' };
+  const hash = await sha1Hex(url);
+  const token = lastStatus.auth_token || '';
+  try {
+    const resp = await fetch(`${base}/thumbs/${hash}.jpg`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'image/jpeg',
+        'X-CC-Auth': token,
+      },
+      body: blob,
+    });
+    if (!resp.ok) {
+      return { ok: false, error: `HTTP ${resp.status}` };
+    }
+    _uploadedThumbs.add(url);
+    console.log('[roku-host] uploaded featured thumb:', url, `(${blob.size}B)`);
+    return { ok: true, bytes: blob.size };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+export async function handleFeaturedCaptureRequest(url, dataUrl, tabId) {
+  // Called from background.js when the content script says it's reached 30s
+  // on a video that lives in a featured playlist. Double-check here so the
+  // content script can stay dumb about playlist membership.
+  if (!(await isFeaturedUrl(url))) return { ok: false, error: 'not featured' };
+  if (_uploadedThumbs.has(url)) return { ok: true, cached: true };
+  if (dataUrl) return uploadFeaturedThumb(url, dataUrl);
+  // Fallback: content script's canvas read was blocked by CORS. Use
+  // captureVisibleTab, which captures the whole viewport but isn't tainted.
+  try {
+    const tab = typeof tabId === 'number'
+      ? await chrome.tabs.get(tabId)
+      : (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
+    if (!tab) return { ok: false, error: 'no tab' };
+    const fallback = await chrome.tabs.captureVisibleTab(
+      tab.windowId, { format: 'jpeg', quality: 80 },
+    );
+    return uploadFeaturedThumb(url, fallback);
+  } catch (e) {
+    return { ok: false, error: `captureVisibleTab failed: ${e.message}` };
+  }
 }
 
 async function loadPlaylistByIndex(index, shuffled) {
@@ -343,6 +510,57 @@ async function handleRemoteCommand(cmd, args) {
       }, 'command_enqueued').catch(e =>
         console.error('[roku-host] refresh_queue after load failed', e));
     }, 200);
+    return;
+  }
+  if (cmd === 'load_featured') {
+    // bucket = 'classics' | 'incoming'; start_index defaults to 0.
+    // Slices the chosen featured playlist from start_index onward and
+    // installs it as videoQueue, so picking a poster in the Kodi/Roku
+    // browse grid plays from there.
+    const bucket = args?.bucket;
+    const startIndex = Math.max(0, (args?.start_index | 0));
+    const name = bucket === 'classics'
+      ? FEATURED_CLASSICS_NAME
+      : bucket === 'incoming'
+        ? FEATURED_INCOMING_NAME
+        : null;
+    if (!name) return;
+    const { classics, incoming } = await buildFeaturedPayload();
+    const videos = bucket === 'classics' ? classics : incoming;
+    if (!videos.length || startIndex >= videos.length) {
+      console.warn('[roku-host] load_featured: empty or OOB', bucket, startIndex);
+      return;
+    }
+    const sliced = videos.slice(startIndex);
+    await chrome.storage.local.set({ videoQueue: sliced });
+    setTimeout(() => {
+      sendCommand({
+        cmd: 'enqueue_command',
+        command_name: 'refresh_queue',
+        args: {},
+      }, 'command_enqueued').catch(e =>
+        console.error('[roku-host] refresh_queue after load_featured failed', e));
+    }, 200);
+    return;
+  }
+  if (cmd === 'play_queue') {
+    const data = await chrome.storage.local.get('videoQueue');
+    const q = Array.isArray(data.videoQueue) ? data.videoQueue : [];
+    if (q.length === 0) return;
+    const first = q[0];
+    if (!first || !first.url) return;
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab) return;
+    const navUrl = await resolvePlayUrl(first.url);
+    // Check both canonical and resolved URL to avoid no-op reload
+    let tabCanonical = tab.url;
+    if (tab.url.startsWith('file://')) {
+      const c = await resolveCanonicalFromLocal(tab.url);
+      if (c) tabCanonical = c;
+    }
+    if (tabCanonical === first.url) return;
+    await chrome.tabs.update(tab.id, { url: navUrl });
+    console.log('[roku-host] play_queue:', navUrl);
     return;
   }
   if (cmd === 'queue_remove_url') {
@@ -451,6 +669,101 @@ export function getLastEvent() {
   return lastRokuEvent ? { ...lastRokuEvent } : null;
 }
 
+function localPathToFileUrl(p) {
+  let s = (p || '').replace(/\\/g, '/');
+  if (!s.startsWith('/')) s = '/' + s;  // Windows drive letter needs leading /
+  return 'file://' + s;
+}
+
+export function normalizeLocalPath(p) {
+  return (p || '').replace(/\\/g, '/').toLowerCase();
+}
+
+export async function resolvePlayUrl(url) {
+  // If the video has a localPath, return a file:// URL that Chrome can
+  // open directly — no native host required. Otherwise return the
+  // original URL unchanged.
+  if (!url) return url;
+  const videoId = 'video_' + url;
+  const data = await chrome.storage.local.get(videoId);
+  const vd = data[videoId] || {};
+  if (!vd.localPath) return url;
+  return localPathToFileUrl(vd.localPath);
+}
+
+export async function resolvePlayUrls(urls) {
+  // Batch version — returns a map {originalUrl: resolvedUrl}.
+  const keys = urls.map(u => 'video_' + u);
+  const data = await chrome.storage.local.get(keys);
+  const result = {};
+  for (const u of urls) {
+    const vd = data['video_' + u] || {};
+    if (vd.localPath) {
+      result[u] = localPathToFileUrl(vd.localPath);
+    } else {
+      result[u] = u;
+    }
+  }
+  return result;
+}
+
+// Reverse lookup: given a file:// URL or local path, find the canonical
+// remote URL. Checks the _localIdx_ index first (O(1)), then falls back
+// to a full scan of video_* entries if the index is stale or missing.
+export async function resolveCanonicalFromLocal(fileUrlOrPath) {
+  let p = fileUrlOrPath;
+  if (p.startsWith('file://')) p = p.replace(/^file:\/\/\//, '').replace(/^file:\/\//, '');
+  p = decodeURIComponent(p);  // file:// URLs may be percent-encoded
+  const norm = normalizeLocalPath(p);
+  const key = '_localIdx_' + norm;
+  const cached = await chrome.storage.local.get(key);
+  if (cached[key]) return cached[key];
+
+  // Index miss — scan all video_* entries. This covers localPaths that
+  // were set before the index existed, or if the index entry was lost.
+  const all = await chrome.storage.local.get(null);
+  for (const [k, v] of Object.entries(all)) {
+    if (!k.startsWith('video_') || !v?.localPath) continue;
+    if (normalizeLocalPath(v.localPath) === norm) {
+      const canonUrl = k.slice(6);  // strip 'video_' prefix
+      // Repair the index for next time
+      chrome.storage.local.set({ [key]: canonUrl }).catch(() => {});
+      return canonUrl;
+    }
+  }
+  return null;
+}
+
+// Build/refresh the full _localIdx_ index from all video_* entries.
+// Called once on extension startup so the index is always warm.
+export async function rebuildLocalPathIndex() {
+  const all = await chrome.storage.local.get(null);
+  const updates = {};
+  // Also collect stale index keys to clean up
+  const staleKeys = [];
+  for (const [k, v] of Object.entries(all)) {
+    if (k.startsWith('_localIdx_')) {
+      // We'll rebuild, so mark existing ones for potential cleanup
+      staleKeys.push(k);
+    }
+  }
+  for (const [k, v] of Object.entries(all)) {
+    if (!k.startsWith('video_') || !v?.localPath) continue;
+    const canonUrl = k.slice(6);
+    const idxKey = '_localIdx_' + normalizeLocalPath(v.localPath);
+    updates[idxKey] = canonUrl;
+  }
+  // Remove stale index entries that no longer have a matching video
+  const toRemove = staleKeys.filter(k => !(k in updates));
+  if (toRemove.length > 0) {
+    await chrome.storage.local.remove(toRemove);
+  }
+  if (Object.keys(updates).length > 0) {
+    await chrome.storage.local.set(updates);
+  }
+  console.log(`[roku-host] local path index: ${Object.keys(updates).length} entries, ${toRemove.length} stale removed`);
+}
+
 export async function enqueueCommand(commandName, args = {}) {
   if (!nativePort) return { ok: false, error: 'not hosting' };
   return sendCommand(
@@ -543,22 +856,36 @@ export async function handleCommandForRoku(command, settings) {
 // Auto-push on storage changes (queue, playlists, or tag/cut edits)
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
-  if (!nativePort) return;
+  let perVideoChanged = false;
   const relevantTopLevel =
     'videoQueue' in changes ||
     'queueStartMode' in changes ||
     'queueEndMode' in changes;
-  let perVideoChanged = false;
-  if (!relevantTopLevel) {
-    for (const key of Object.keys(changes)) {
-      if (key.startsWith('video_')) { perVideoChanged = true; break; }
+  for (const key of Object.keys(changes)) {
+    if (key.startsWith('video_')) {
+      perVideoChanged = true;
+      // If localPath was added, changed, or removed on this entry,
+      // update the reverse index incrementally.
+      const oldPath = changes[key].oldValue?.localPath;
+      const newPath = changes[key].newValue?.localPath;
+      if (oldPath !== newPath) {
+        const canonUrl = key.slice(6);
+        if (oldPath) {
+          chrome.storage.local.remove('_localIdx_' + normalizeLocalPath(oldPath)).catch(() => {});
+        }
+        if (newPath) {
+          chrome.storage.local.set({
+            ['_localIdx_' + normalizeLocalPath(newPath)]: canonUrl,
+          }).catch(() => {});
+        }
+      }
     }
   }
-  if (relevantTopLevel || perVideoChanged) {
+  if (nativePort && (relevantTopLevel || perVideoChanged)) {
     pushCurrentQueue().catch(e =>
       console.error('[roku-host] pushCurrentQueue failed', e));
   }
-  if ('playlists' in changes) {
+  if (nativePort && 'playlists' in changes) {
     pushCurrentPlaylists().catch(e =>
       console.error('[roku-host] pushCurrentPlaylists failed', e));
   }

@@ -22,6 +22,20 @@
   let queueEndTime = null; // Time at which video should "end" and move to next
   let queueEndTriggered = false; // Prevent multiple triggers
 
+  // Featured-playlist screenshot capture: at 30s into a video that lives in
+  // one of the two featured playlists, grab a frame and send it to the
+  // native host (via background). Once per page load.
+  const FEATURED_CLASSICS_NAME = 'Featured Videos - Classics';
+  const FEATURED_INCOMING_NAME = 'Featured Videos - Incoming';
+  const FEATURED_CAPTURE_TIME = 30;
+  let featuredCaptureAttempted = false;
+
+  // When playing a local file via the native host, window.location.href is
+  // http://127.0.0.1:<port>/media/<slugId>?tok=... — not the canonical URL.
+  // This variable holds the original URL so getVideoId() and queue matching
+  // use the right key.  Null means "just use window.location.href".
+  let _canonicalUrl = null;
+
   // Subtitle manager instance
   let subtitleManager = null;
 
@@ -318,6 +332,8 @@
   function setupVideoListeners() {
     if (!videoElement) return;
 
+    featuredCaptureAttempted = false;
+
     videoElement.addEventListener('timeupdate', handleTimeUpdate);
     videoElement.addEventListener('ended', handleVideoEnded);
 
@@ -337,6 +353,48 @@
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  async function maybeCaptureFeaturedFrame(video) {
+    // Gated on this page being a featured video to avoid bothering the
+    // native host (and chewing bandwidth) for every random tab at 30s.
+    try {
+      const { playlists = [] } = await chrome.storage.local.get('playlists');
+      const url = getCanonicalUrl();
+      const inFeatured = playlists.some(p =>
+        (p?.name === FEATURED_CLASSICS_NAME || p?.name === FEATURED_INCOMING_NAME)
+        && Array.isArray(p.videos)
+        && p.videos.some(v => v?.url === url)
+      );
+      if (!inFeatured) return;
+
+      // Try canvas readback first. This gives us the actual video frame,
+      // not the whole tab, and works for same-origin / CORS-enabled video
+      // sources. On YouTube etc. it will throw a SecurityError — in that
+      // case we fall through and let the background use captureVisibleTab.
+      let dataUrl = null;
+      try {
+        const w = video.videoWidth || 640;
+        const h = video.videoHeight || 360;
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, w, h);
+        dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+      } catch (e) {
+        console.log('[customcuts] featured frame: canvas tainted, falling back', e.message);
+        dataUrl = null;
+      }
+
+      chrome.runtime.sendMessage({
+        action: 'featuredCaptureRequest',
+        url,
+        dataUrl,
+      }).catch(() => {});
+    } catch (e) {
+      console.warn('[customcuts] maybeCaptureFeaturedFrame failed', e);
+    }
   }
 
   function handleVideoPlay() {
@@ -373,7 +431,7 @@
   }
 
   async function loadVideoSettings() {
-    const videoId = `video_${window.location.href}`;
+    const videoId = getVideoId();
     const data = await chrome.storage.local.get(videoId);
     const videoData = data[videoId] || {};
 
@@ -413,8 +471,8 @@
     const startMode = data.queueStartMode || 'B';
     const endMode = data.queueEndMode || '0';
 
-    // Check if we're in the queue
-    const currentUrl = window.location.href;
+    // Check if we're in the queue (use canonical URL for file:// pages)
+    const currentUrl = getCanonicalUrl();
     const isInQueue = queue.some(v => v.url === currentUrl);
     if (!isInQueue || queue.length === 0) return;
 
@@ -1074,7 +1132,11 @@
   }
 
   function getVideoId() {
-    return 'video_' + window.location.href;
+    return 'video_' + (_canonicalUrl || window.location.href);
+  }
+
+  function getCanonicalUrl() {
+    return _canonicalUrl || window.location.href;
   }
 
   // ============================================================================
@@ -1138,6 +1200,11 @@
         action: 'updateVideoTime',
         currentTime: currentTime
       });
+    }
+
+    if (!featuredCaptureAttempted && currentTime >= FEATURED_CAPTURE_TIME) {
+      featuredCaptureAttempted = true;
+      maybeCaptureFeaturedFrame(videoElement);
     }
 
     // Check for queue end mode - trigger "video ended" at the Action End point
@@ -1221,8 +1288,10 @@
     const queue = data.videoQueue || [];
 
     if (queue.length > 0) {
-      const currentUrl = window.location.href;
-      const currentIndex = queue.findIndex(v => v.url === currentUrl);
+      // Use the canonical URL (resolved at boot from file:// or slug)
+      // so queue matching works for local-file playback.
+      const canonical = getCanonicalUrl();
+      const currentIndex = queue.findIndex(v => v.url === canonical);
 
       if (currentIndex >= 0 && currentIndex < queue.length - 1) {
         // There's a next video in queue
@@ -1521,10 +1590,55 @@
   // Initialization
   // ============================================================================
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initVideo);
-  } else {
+  // If we're on a file:// or localhost /media/ page (local file playback),
+  // reverse-lookup the canonical URL so that getVideoId() returns the
+  // right storage key for tags/cuts/ratings.
+  async function resolveCanonicalUrl() {
+    const href = window.location.href;
+
+    // file:// URL → use the persisted reverse index
+    if (href.startsWith('file://')) {
+      try {
+        const c = await chrome.runtime.sendMessage({
+          action: 'resolveCanonicalFromLocal', url: href,
+        });
+        if (c) {
+          _canonicalUrl = c;
+          console.log('[customcuts] canonical URL resolved from file://:', _canonicalUrl);
+        }
+      } catch (_) {}
+      return;
+    }
+
+    // localhost /media/<slug> URL (Roku/Kodi proxy path) — scan queue
+    const m = href.match(/^https?:\/\/127\.0\.0\.1:\d+\/media\/(v[a-z0-9]+)/);
+    if (!m) return;
+    const slugTarget = m[1];
+    try {
+      const { videoQueue = [] } = await chrome.storage.local.get('videoQueue');
+      for (const v of videoQueue) {
+        let h = 5381 >>> 0;
+        for (let i = 0; i < v.url.length; i++) {
+          h = (((h << 5) + h) ^ v.url.charCodeAt(i)) >>> 0;
+        }
+        if ('v' + h.toString(36) === slugTarget) {
+          _canonicalUrl = v.url;
+          console.log('[customcuts] canonical URL resolved from slug:', _canonicalUrl);
+          return;
+        }
+      }
+    } catch (_) {}
+  }
+
+  async function boot() {
+    await resolveCanonicalUrl();
     initVideo();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => boot());
+  } else {
+    boot();
   }
 
   setTimeout(initVideo, 1000);

@@ -6,6 +6,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const ratingPersonFilter = document.getElementById('rating-person-filter');
   const ratingFilter = document.getElementById('rating-filter');
   const sortBy = document.getElementById('sort-by');
+  const videoLengthFilter = document.getElementById('video-length-filter');
   const tagLengthMode = document.getElementById('tag-length-mode');
   const tagLengthMin = document.getElementById('tag-length-min');
   const videoCount = document.getElementById('video-count');
@@ -35,6 +36,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const openVideoBtn = document.getElementById('open-video-btn');
 
   let allVideos = [];
+  let _localUrlMap = {};  // {canonicalUrl: resolvedUrl} — refreshed on load
   let currentEditVideoId = null;
 
   // Quick tags container
@@ -234,21 +236,73 @@ document.addEventListener('DOMContentLoaded', async () => {
           ratings.P1 = value.rating;
         }
 
+        // Auto-tag: inject a virtual "local" tag for videos with a local file
+        const tags = [...(value.tags || [])];
+        if (value.localPath) {
+          tags.push({ name: 'local', _virtual: true });
+        }
+
+        // Auto-tag: inject a virtual "length" tag from stored duration.
+        // Only generated when the video has real (non-virtual) tags.
+        const realTagCount = (value.tags || []).length;
+        const dur = value.duration || 0;
+        if (dur > 0 && realTagCount > 0) {
+          const mm = Math.floor(dur / 60);
+          const hh = Math.floor(mm / 60);
+          const lenLabel = hh > 0
+            ? hh + 'h ' + (mm % 60) + 'm'
+            : mm + 'm';
+          tags.push({ name: 'length:' + lenLabel, _virtual: true, _duration: dur });
+        }
+
+        // TITLE tag override: use titleText as the display title
+        const titleTag = tags.find(t => t.name === 'TITLE' && t.titleText);
+        const displayTitle = titleTag ? titleTag.titleText : (value.title || url);
+
         allVideos.push({
           id: key,
           url: url,
-          title: value.title || url,
+          title: displayTitle,
+          originalTitle: value.title || url,
           ratings: ratings,
           avgRating: calculateAvgRating(ratings),
-          tags: value.tags || [],
+          tags: tags,
+          duration: dur,
           feedback: value.feedback || '',
           lastTagged: getLastTaggedTime(value.tags)
         });
       }
     }
 
+    // Pre-resolve local play URLs for all known video URLs.
+    await refreshLocalUrlMap();
+
     updateTagFilterOptions();
     renderVideos();
+  }
+
+  async function refreshLocalUrlMap() {
+    // Collect URLs from both the video list AND all playlists so playlist
+    // editor links resolve correctly even for untagged videos.
+    const urlSet = new Set(allVideos.map(v => v.url));
+    for (const pl of allPlaylists) {
+      if (Array.isArray(pl?.videos)) {
+        for (const v of pl.videos) {
+          if (v?.url) urlSet.add(v.url);
+        }
+      }
+    }
+    try {
+      _localUrlMap = await chrome.runtime.sendMessage({
+        action: 'resolvePlayUrls', urls: [...urlSet],
+      }) || {};
+    } catch (_) {
+      _localUrlMap = {};
+    }
+  }
+
+  function playUrl(canonicalUrl) {
+    return _localUrlMap[canonicalUrl] || canonicalUrl;
   }
 
   function calculateAvgRating(ratings) {
@@ -269,7 +323,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   function updateTagFilterOptions() {
     const allTags = new Set();
     allVideos.forEach(video => {
-      video.tags.forEach(tag => allTags.add(tag.name.toLowerCase()));
+      video.tags.forEach(tag => {
+        // Exclude auto-generated length tags from the filter summaries
+        if (tag._duration) return;
+        allTags.add(tag.name.toLowerCase());
+      });
     });
 
     const sortedTags = [...allTags].sort();
@@ -399,6 +457,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     }
 
+    // Video length filter
+    if (filters.videoLength) {
+      const thresholds = { '15m': 900, '30m': 1800, '45m': 2700, '1h': 3600 };
+      const minDur = thresholds[filters.videoLength] || 0;
+      if (minDur > 0) {
+        filtered = filtered.filter(video => (video.duration || 0) >= minDur);
+      }
+    }
+
     // Rating filter
     if (filters.minRating) {
       const minRating = parseInt(filters.minRating);
@@ -430,6 +497,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       case 'alpha':
         filtered.sort((a, b) => a.title.localeCompare(b.title));
         break;
+      case 'longest':
+        filtered.sort((a, b) => (b.duration || 0) - (a.duration || 0));
+        break;
+      case 'shortest':
+        filtered.sort((a, b) => (a.duration || 0) - (b.duration || 0));
+        break;
     }
 
     return filtered;
@@ -446,6 +519,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       tagLengthMin: parseTime(tagLengthMin.value),
       ratingPerson: ratingPersonFilter.value,
       minRating: ratingFilter.value,
+      videoLength: videoLengthFilter.value,
       sortBy: sortBy.value
     };
     return applyFiltersToVideos(allVideos, filters);
@@ -462,6 +536,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       tagLengthMin: parseTime(tagLengthMin.value),
       ratingPerson: ratingPersonFilter.value,
       minRating: ratingFilter.value,
+      videoLength: videoLengthFilter.value,
       sortBy: sortBy.value
     };
   }
@@ -513,7 +588,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const filtered = filterAndSortVideos();
 
     // Update stats
-    const totalTags = filtered.reduce((sum, v) => sum + v.tags.length, 0);
+    const totalTags = filtered.reduce((sum, v) => sum + v.tags.filter(t => !t._duration).length, 0);
     videoCount.textContent = `${filtered.length} video${filtered.length !== 1 ? 's' : ''}`;
     tagCount.textContent = `${totalTags} total tag${totalTags !== 1 ? 's' : ''}`;
 
@@ -522,14 +597,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    videoList.innerHTML = filtered.map(video => `
+    videoList.innerHTML = filtered.map(video => {
+      const pUrl = playUrl(video.url);
+      const isLocal = pUrl !== video.url;
+      return `
       <div class="video-card" data-id="${video.id}">
         <div class="video-info">
           <div class="video-title">
-            <a href="${video.url}" target="_blank" title="${video.url}">${video.title}</a>
+            <a href="${pUrl}" target="_blank" title="${video.url}">${video.title}</a>
+            ${isLocal ? '<span style="color:#4ade80;font-size:11px" title="Local file available"> [local]</span>' : ''}
           </div>
           <div class="video-url">
-            <a href="${video.url}" target="_blank">${video.url}</a>
+            <a href="${pUrl}" target="_blank">${video.url}</a>
           </div>
           <div class="video-meta">
             ${renderRatingsSummary(video.ratings)}
@@ -537,8 +616,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           </div>
           <div class="video-tags">
             ${video.tags.slice(0, 8).map(tag => `
-              <span class="tag-chip ${tag.startTime !== undefined ? 'has-time' : ''}" ${tag.popText ? `title="${escapeHtml(tag.popText)}"` : ''}>
-                ${escapeHtml(tag.name)}
+              <span class="tag-chip ${tag._virtual && tag._duration ? 'tag-length' : tag._virtual ? 'tag-auto' : ''} ${tag.name === 'TITLE' ? 'tag-title' : ''} ${tag.startTime !== undefined ? 'has-time' : ''}" ${tag.popText ? `title="${escapeHtml(tag.popText)}"` : ''}>
+                ${escapeHtml(tag.name)}${tag.titleText ? ': ' + escapeHtml(tag.titleText) : ''}
                 ${tag.startTime !== undefined ? `<small>(${formatTime(tag.startTime)})</small>` : ''}
                 ${tag.intensity ? `<span class="intensity">${tag.intensity}</span>` : ''}
                 ${tag.popText ? `<small class="pop-preview">"${escapeHtml(tag.popText.substring(0, 15))}${tag.popText.length > 15 ? '...' : ''}"</small>` : ''}
@@ -550,10 +629,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         </div>
         <div class="video-actions">
           <button class="btn btn-primary edit-btn" data-id="${video.id}">Edit Tags</button>
-          <button class="btn btn-secondary open-btn" data-url="${video.url}">Open</button>
+          <button class="btn btn-secondary open-btn" data-url="${pUrl}">Open</button>
         </div>
       </div>
-    `).join('');
+    `}).join('');
 
     // Add event listeners
     videoList.querySelectorAll('.edit-btn').forEach(btn => {
@@ -735,8 +814,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     videos.forEach(video => {
       video.tags.forEach(tag => {
         const name = tag.name.toLowerCase();
-        // Exclude special tags and pop-up tags
-        if (EXCLUDED_QUICK_TAGS.has(name) || tag.popText) {
+        // Exclude special tags, pop-up tags, and auto-generated length tags
+        if (EXCLUDED_QUICK_TAGS.has(name) || tag.popText || tag._duration) {
           return;
         }
         tagCounts.set(name, (tagCounts.get(name) || 0) + 1);
@@ -787,6 +866,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadPacksData();
     const data = await chrome.storage.local.get('playlists');
     allPlaylists = data.playlists || [];
+    await refreshLocalUrlMap();
     renderPlaylists();
   }
 
@@ -861,6 +941,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     playlistNameInput.value = playlist.name;
     currentPlaylistVideos = [...playlist.videos];
 
+    await refreshLocalUrlMap();
     renderPlaylistVideos();
     renderAvailableVideos();
 
@@ -891,6 +972,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     return '<span class="action-badge badge-a2" title="Action Start (has duration)">[A2]</span>';
   }
 
+  function displayTitleForUrl(url, fallback) {
+    // Check allVideos for a TITLE-overridden title
+    const v = allVideos.find(v => v.url === url);
+    return v ? v.title : (fallback || url);
+  }
+
   function renderPlaylistVideos() {
     playlistVideoCount.textContent = currentPlaylistVideos.length;
 
@@ -899,12 +986,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    playlistVideosList.innerHTML = currentPlaylistVideos.map((video, index) => `
+    playlistVideosList.innerHTML = currentPlaylistVideos.map((video, index) => {
+      const pUrl = playUrl(video.url);
+      const isLocal = pUrl !== video.url;
+      return `
       <div class="playlist-video-item" data-index="${index}">
         ${getActionStartBadge(video.url)}
         <div class="video-item-info">
-          <div class="video-item-title"><a href="${escapeHtml(video.url)}" target="_blank">${escapeHtml(video.title)}</a></div>
-          <div class="video-item-url"><a href="${escapeHtml(video.url)}" target="_blank">${escapeHtml(video.url)}</a></div>
+          <div class="video-item-title"><a href="${pUrl}" target="_blank">${escapeHtml(displayTitleForUrl(video.url, video.title))}</a>${isLocal ? ' <span style="color:#4ade80;font-size:11px">[local]</span>' : ''}</div>
+          <div class="video-item-url"><a href="${pUrl}" target="_blank">${escapeHtml(video.url)}</a></div>
         </div>
         <div class="video-item-actions">
           <button class="video-item-btn move" data-dir="up" data-index="${index}" ${index === 0 ? 'disabled' : ''}>↑</button>
@@ -912,7 +1002,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           <button class="video-item-btn remove" data-index="${index}">Remove</button>
         </div>
       </div>
-    `).join('');
+    `}).join('');
 
     playlistVideosList.querySelectorAll('.video-item-btn.remove').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -955,18 +1045,21 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    availableVideosList.innerHTML = available.map(video => `
+    availableVideosList.innerHTML = available.map(video => {
+      const pUrl = playUrl(video.url);
+      const isLocal = pUrl !== video.url;
+      return `
       <div class="available-video-item" data-url="${escapeHtml(video.url)}">
         ${getActionStartBadge(video.url)}
         <div class="video-item-info">
-          <div class="video-item-title"><a href="${escapeHtml(video.url)}" target="_blank">${escapeHtml(video.title)}</a></div>
-          <div class="video-item-url"><a href="${escapeHtml(video.url)}" target="_blank">${escapeHtml(video.url)}</a></div>
+          <div class="video-item-title"><a href="${pUrl}" target="_blank">${escapeHtml(displayTitleForUrl(video.url, video.title))}</a>${isLocal ? ' <span style="color:#4ade80;font-size:11px">[local]</span>' : ''}</div>
+          <div class="video-item-url"><a href="${pUrl}" target="_blank">${escapeHtml(video.url)}</a></div>
         </div>
         <div class="video-item-actions">
           <button class="video-item-btn add" data-url="${escapeHtml(video.url)}" data-title="${escapeHtml(video.title)}">Add</button>
         </div>
       </div>
-    `).join('');
+    `}).join('');
 
     availableVideosList.querySelectorAll('.video-item-btn.add').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -1028,7 +1121,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Navigate to first video
     const firstVideo = queue[0];
-    chrome.tabs.create({ url: firstVideo.url });
+    const navUrl = await chrome.runtime.sendMessage({ action: 'resolvePlayUrl', url: firstVideo.url }) || firstVideo.url;
+    chrome.tabs.create({ url: navUrl });
   }
 
   function shuffleArray(array) {
@@ -1062,7 +1156,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Navigate to first video
     const firstVideo = queue[0];
-    chrome.tabs.create({ url: firstVideo.url });
+    const navUrl = await chrome.runtime.sendMessage({ action: 'resolvePlayUrl', url: firstVideo.url }) || firstVideo.url;
+    chrome.tabs.create({ url: navUrl });
   }
 
   async function queueAllPlaylistsShuffled() {
@@ -1099,7 +1194,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Navigate to first video
     const firstVideo = queue[0];
-    chrome.tabs.create({ url: firstVideo.url });
+    const navUrl = await chrome.runtime.sendMessage({ action: 'resolvePlayUrl', url: firstVideo.url }) || firstVideo.url;
+    chrome.tabs.create({ url: navUrl });
   }
 
   // ==================== BG MUSIC FUNCTIONS ====================
@@ -1353,7 +1449,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Navigate to first video
     const firstVideo = queue[0];
-    chrome.tabs.create({ url: firstVideo.url });
+    const navUrl = await chrome.runtime.sendMessage({ action: 'resolvePlayUrl', url: firstVideo.url }) || firstVideo.url;
+    chrome.tabs.create({ url: navUrl });
   }
 
   async function playLiveGeneratedPlaylistShuffled(index) {
@@ -1385,13 +1482,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Navigate to first video
     const firstVideo = queue[0];
-    chrome.tabs.create({ url: firstVideo.url });
+    const navUrl = await chrome.runtime.sendMessage({ action: 'resolvePlayUrl', url: firstVideo.url }) || firstVideo.url;
+    chrome.tabs.create({ url: navUrl });
   }
 
   function getAllTagsForLiveGeneratedModal() {
     const allTags = new Set();
     allVideos.forEach(video => {
-      video.tags.forEach(tag => allTags.add(tag.name.toLowerCase()));
+      video.tags.forEach(tag => {
+        if (tag._duration) return;
+        allTags.add(tag.name.toLowerCase());
+      });
     });
     return [...allTags].sort();
   }
@@ -2696,6 +2797,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   searchInput.addEventListener('input', renderVideos);
   ratingPersonFilter.addEventListener('change', renderVideos);
   ratingFilter.addEventListener('change', renderVideos);
+  videoLengthFilter.addEventListener('change', renderVideos);
   sortBy.addEventListener('change', renderVideos);
 
   // Tag length filter

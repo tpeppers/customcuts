@@ -367,6 +367,27 @@ h3 {
   color: #155724;
 }
 
+.tag-chip.tag-auto {
+  background: #d0f0e0;
+  color: #065f46;
+  border: 1px dashed #34d399;
+  font-style: italic;
+}
+
+.tag-chip.tag-length {
+  background: #f0e6ff;
+  color: #5b21b6;
+  border: 1px dashed #a78bfa;
+  font-style: italic;
+}
+
+.tag-chip.tag-title {
+  background: #dbeafe;
+  color: #1e40af;
+  border: 1px solid #60a5fa;
+  font-weight: 600;
+}
+
 .tag-chip .intensity {
   background: #e74c3c;
   color: white;

@@ -55,12 +55,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   const feedbackText = document.getElementById('feedback-text');
   const saveFeedbackBtn = document.getElementById('save-feedback-btn');
   const feedbackStatus = document.getElementById('feedback-status');
+  const localPathInput = document.getElementById('local-path-input');
+  const saveLocalPathBtn = document.getElementById('save-local-path-btn');
+  const clearLocalPathBtn = document.getElementById('clear-local-path-btn');
+  const localPathStatus = document.getElementById('local-path-status');
+  const titleOverrideInput = document.getElementById('title-override-input');
+  const saveTitleOverrideBtn = document.getElementById('save-title-override-btn');
+  const clearTitleOverrideBtn = document.getElementById('clear-title-override-btn');
+  const titleOverrideStatus = document.getElementById('title-override-status');
   const managerBtn = document.getElementById('manager-btn');
   const optionsBtn = document.getElementById('options-btn');
 
   // Queue elements
   const queueSection = document.getElementById('queue-section');
   const queueList = document.getElementById('queue-list');
+  const playQueueBtn = document.getElementById('play-queue-btn');
   const skipQueueBtn = document.getElementById('skip-queue-btn');
   const clearQueueBtn = document.getElementById('clear-queue-btn');
   const queueStartToggle = document.getElementById('queue-start-toggle');
@@ -127,9 +136,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  // When the popup opens on a file:// URL, this holds the canonical
+  // (remote) URL so getVideoId() returns the right storage key.
+  let _canonicalTabUrl = null;
+
   async function init() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     currentTab = tab;
+
+    // If we're on a local file, resolve the canonical remote URL so
+    // all tag/rating lookups and saves go to the right video entry.
+    if (tab.url && tab.url.startsWith('file://')) {
+      _canonicalTabUrl = await resolveCanonical(tab.url);
+    }
 
     // Load popup settings first
     await loadPopupSettings();
@@ -143,7 +162,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         showVideoControls(response);
       }
     } catch (e) {
-      console.log('No video found or content script not loaded');
+      // On file:// pages Chrome's built-in player has a <video> — if
+      // the content script found it, show controls. If not, still show
+      // controls if we resolved a canonical URL (we know it's a video).
+      if (_canonicalTabUrl && _canonicalTabUrl !== tab.url) {
+        showVideoControls({ hasVideo: true, duration: 0, currentTime: 0 });
+      } else {
+        console.log('No video found or content script not loaded');
+      }
     }
   }
 
@@ -169,21 +195,39 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  function renderQueue(queue) {
+  async function renderQueue(queue) {
     if (queue.length === 0) {
       queueList.innerHTML = '<p class="empty-text">No videos in queue</p>';
       return;
     }
 
+    // Batch-fetch TITLE tag overrides for all queue entries
+    const videoKeys = queue.map(v => 'video_' + v.url);
+    const allData = await chrome.storage.local.get(videoKeys);
+    function displayTitle(video) {
+      const vd = allData['video_' + video.url] || {};
+      const tt = (vd.tags || []).find(t => t.name === 'TITLE' && t.titleText);
+      return tt ? tt.titleText : video.title;
+    }
+
     // Find current video in queue
     const currentUrl = currentTab.url;
 
+    // Batch-resolve local play URLs
+    let playUrls;
+    try {
+      playUrls = await chrome.runtime.sendMessage({
+        action: 'resolvePlayUrls', urls: queue.map(v => v.url),
+      }) || {};
+    } catch (_) { playUrls = {}; }
+
     queueList.innerHTML = queue.map((video, index) => {
       const isCurrent = video.url === currentUrl;
+      const pUrl = playUrls[video.url] || video.url;
       return `
         <div class="queue-item ${isCurrent ? 'current' : ''}" data-index="${index}">
           <div class="queue-item-info">
-            <div class="queue-item-title">${video.title}</div>
+            <a class="queue-item-title queue-item-link" href="${pUrl}" target="_blank" title="${video.url}">${displayTitle(video)}</a>
             <div class="queue-item-position">${index + 1} of ${queue.length}</div>
           </div>
           <button class="queue-item-remove" data-index="${index}" title="Remove from queue">&times;</button>
@@ -209,23 +253,56 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadQueue();
   }
 
+  async function resolvePlayUrl(url) {
+    try {
+      const resolved = await chrome.runtime.sendMessage({ action: 'resolvePlayUrl', url });
+      return resolved || url;
+    } catch (_) { return url; }
+  }
+
+  // Given the current tab URL (which may be a file:// or remote URL),
+  // return the canonical (remote) URL used as the storage key.
+  async function resolveCanonical(tabUrl) {
+    if (tabUrl.startsWith('file://')) {
+      try {
+        const c = await chrome.runtime.sendMessage({ action: 'resolveCanonicalFromLocal', url: tabUrl });
+        if (c) return c;
+      } catch (_) {}
+    }
+    return tabUrl;
+  }
+
+  async function playFromQueue() {
+    const data = await chrome.storage.local.get('videoQueue');
+    const queue = data.videoQueue || [];
+    if (queue.length === 0) return;
+    const first = queue[0];
+    if (!first || !first.url) return;
+    const navUrl = await resolvePlayUrl(first.url);
+    if (currentTab.url === first.url || currentTab.url === navUrl) return;
+    chrome.tabs.update(currentTab.id, { url: navUrl });
+  }
+
   async function skipToNext() {
     const data = await chrome.storage.local.get('videoQueue');
     const queue = data.videoQueue || [];
 
     if (queue.length === 0) return;
 
-    // Find current video index
-    const currentUrl = currentTab.url;
-    const currentIndex = queue.findIndex(v => v.url === currentUrl);
+    // Resolve current tab URL to canonical form so we can find our
+    // position in the queue even when playing a local file.
+    const canonical = await resolveCanonical(currentTab.url);
+    const currentIndex = queue.findIndex(v => v.url === canonical);
 
+    let targetUrl = null;
     if (currentIndex >= 0 && currentIndex < queue.length - 1) {
-      // Navigate to next video
-      const nextVideo = queue[currentIndex + 1];
-      chrome.tabs.update(currentTab.id, { url: nextVideo.url });
+      targetUrl = queue[currentIndex + 1].url;
     } else if (currentIndex === -1 && queue.length > 0) {
-      // Current video not in queue, go to first
-      chrome.tabs.update(currentTab.id, { url: queue[0].url });
+      targetUrl = queue[0].url;
+    }
+    if (targetUrl) {
+      const navUrl = await resolvePlayUrl(targetUrl);
+      chrome.tabs.update(currentTab.id, { url: navUrl });
     }
   }
 
@@ -248,6 +325,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     const videoId = getVideoId();
     const data = await chrome.storage.local.get(videoId);
     const videoData = data[videoId] || {};
+
+    // Auto-save video duration when the video has existing tags.
+    // Only stored on tagged videos so untagged ones stay clean.
+    // Never save 0 (video not loaded yet). Overwrite a stored 0 or
+    // shorter value if we now have a real duration.
+    const hasTags = videoData.tags && videoData.tags.length > 0;
+    const liveDuration = videoInfo?.duration || 0;
+    const storedDuration = videoData.duration || 0;
+    if (hasTags && liveDuration > 0 && liveDuration > storedDuration) {
+      await saveVideoData({ duration: liveDuration });
+    }
 
     // Query content script for actual live subtitle state (transcription may still be running)
     try {
@@ -284,6 +372,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Load feedback
     feedbackText.value = videoData.feedback || '';
 
+    // Load local file path
+    localPathInput.value = videoData.localPath || '';
+
+    // Load title override from TITLE tag
+    const titleTag = (videoData.tags || []).find(t => t.name === 'TITLE');
+    titleOverrideInput.value = titleTag?.titleText || '';
+
     const tags = videoData.tags || [];
     renderTags(tags);
     updateTagFilter(tags, videoData.selectedTagFilters || []);
@@ -309,7 +404,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function getVideoId() {
-    return `video_${currentTab.url}`;
+    return `video_${_canonicalTabUrl || currentTab.url}`;
   }
 
   function formatTime(seconds) {
@@ -1313,6 +1408,66 @@ document.addEventListener('DOMContentLoaded', async () => {
     }, 2000);
   });
 
+  // Local file path — also maintains a reverse index so that opening a
+  // file:// URL in the browser can resolve back to the canonical remote URL.
+  function _normalizeLocalPath(p) {
+    return (p || '').replace(/\\/g, '/').toLowerCase();
+  }
+  saveLocalPathBtn.addEventListener('click', async () => {
+    const p = localPathInput.value.trim();
+    const canonUrl = _canonicalTabUrl || currentTab.url;
+    // Remove old index entry if path changed
+    const videoId = getVideoId();
+    const prev = (await chrome.storage.local.get(videoId))[videoId] || {};
+    if (prev.localPath) {
+      await chrome.storage.local.remove('_localIdx_' + _normalizeLocalPath(prev.localPath));
+    }
+    await saveVideoData({ localPath: p || '' });
+    if (p) {
+      await chrome.storage.local.set({ ['_localIdx_' + _normalizeLocalPath(p)]: canonUrl });
+    }
+    localPathStatus.textContent = p ? 'Saved' : 'Cleared';
+    setTimeout(() => { localPathStatus.textContent = ''; }, 2000);
+  });
+  clearLocalPathBtn.addEventListener('click', async () => {
+    const videoId = getVideoId();
+    const prev = (await chrome.storage.local.get(videoId))[videoId] || {};
+    if (prev.localPath) {
+      await chrome.storage.local.remove('_localIdx_' + _normalizeLocalPath(prev.localPath));
+    }
+    localPathInput.value = '';
+    await saveVideoData({ localPath: '' });
+    localPathStatus.textContent = 'Cleared';
+    setTimeout(() => { localPathStatus.textContent = ''; }, 2000);
+  });
+
+  // Title override (TITLE tag)
+  saveTitleOverrideBtn.addEventListener('click', async () => {
+    const text = titleOverrideInput.value.trim();
+    const videoId = getVideoId();
+    const data = await chrome.storage.local.get(videoId);
+    const vd = data[videoId] || {};
+    let tags = [...(vd.tags || [])];
+    // Remove existing TITLE tag
+    tags = tags.filter(t => t.name !== 'TITLE');
+    if (text) {
+      tags.push({ name: 'TITLE', titleText: text, createdAt: Date.now() });
+    }
+    await saveVideoData({ tags });
+    titleOverrideStatus.textContent = text ? 'Saved' : 'Cleared';
+    setTimeout(() => { titleOverrideStatus.textContent = ''; }, 2000);
+  });
+  clearTitleOverrideBtn.addEventListener('click', async () => {
+    titleOverrideInput.value = '';
+    const videoId = getVideoId();
+    const data = await chrome.storage.local.get(videoId);
+    const vd = data[videoId] || {};
+    const tags = (vd.tags || []).filter(t => t.name !== 'TITLE');
+    await saveVideoData({ tags });
+    titleOverrideStatus.textContent = 'Cleared';
+    setTimeout(() => { titleOverrideStatus.textContent = ''; }, 2000);
+  });
+
   managerBtn.addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('manager/manager.html') });
   });
@@ -1322,6 +1477,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Queue event listeners
+  playQueueBtn.addEventListener('click', playFromQueue);
   skipQueueBtn.addEventListener('click', skipToNext);
 
   clearQueueBtn.addEventListener('click', async () => {

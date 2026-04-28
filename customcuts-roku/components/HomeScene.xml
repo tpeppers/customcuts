@@ -2,22 +2,96 @@
 <component name="HomeScene" extends="Scene">
     <script type="text/brightscript" uri="HomeScene.brs" />
     <children>
-        <LayoutGroup id="mainLayout" layoutDirection="vert" translation="[60, 60]" itemSpacings="[12]">
-            <Label id="titleLabel" text="CustomCuts Stream" font="font:LargeBoldSystemFont" color="0xFFFFFFFF" />
-            <Label id="statusLabel" text="Connecting..." font="font:MediumSystemFont" color="0xCCCCCCFF" width="1800" />
-            <LabelList id="queueList" itemSize="[1200, 56]" numRows="10" visible="false" />
-        </LayoutGroup>
+        <!-- Title-safe zone: 90px inset on all sides (1920-180=1740 usable width,
+             1080-180=900 usable height). Absolute positioning instead of LayoutGroup
+             so featured rows + queue list sit side-by-side and nothing overflows. -->
+
+        <!-- Top bar -->
+        <Label id="titleLabel" text="CustomCuts Stream"
+            translation="[90, 36]"
+            font="font:MediumBoldSystemFont" color="0xFFFFFFFF" />
+        <Label id="statusLabel" text="Connecting..."
+            translation="[90, 72]"
+            font="font:SmallSystemFont" color="0xCCCCCCFF" width="1740" />
+
+        <!-- Left panel: queue / playlist list -->
+        <LabelList id="queueList"
+            translation="[90, 110]"
+            itemSize="[700, 48]"
+            numRows="16"
+            visible="false" />
+
+        <!-- Right panel: featured poster rows -->
+        <RowList id="featuredRows"
+            visible="false"
+            translation="[820, 110]"
+            itemSize="[920, 380]"
+            numRows="2"
+            rowItemSize="[[200, 115]]"
+            rowHeights="[160]"
+            rowSpacings="[20]"
+            itemSpacings="[0]"
+            showRowLabel="[true]"
+            rowLabelOffset="[[0, 0]]"
+            showRowCounter="[false]" />
+
+        <!-- Video player (fullscreen) -->
         <Video id="videoPlayer" visible="false" width="1920" height="1080" translation="[0, 0]" />
-        <Group id="progressGroup" translation="[60, 1000]" visible="false">
-            <Label id="progressTimeLabel" translation="[0, -34]" font="font:SmallBoldSystemFont" color="0xFFFFFFFF" text="0:00 / 0:00" />
-            <Rectangle id="progressBarBg" width="1800" height="10" color="0x000000AA" />
-            <Rectangle id="progressBarFill" width="0" height="10" color="0xFFCC00FF" />
+
+        <!-- Progress bar (inside title-safe bottom) -->
+        <Group id="progressGroup" translation="[90, 940]" visible="false">
+            <Label id="progressTimeLabel" translation="[0, -28]" font="font:SmallBoldSystemFont" color="0xFFFFFFFF" text="0:00 / 0:00" />
+            <Rectangle id="progressBarBg" width="1740" height="8" color="0x000000AA" />
+            <Rectangle id="progressBarFill" width="0" height="8" color="0xFFCC00FF" />
+        </Group>
+
+        <!-- QR code overlay (centered, shown from menu) -->
+        <Group id="qrOverlay" visible="false" translation="[510, 140]">
+            <Rectangle width="900" height="800" color="0x111827FF" />
+            <Label translation="[450, 20]" horizAlign="center" width="900"
+                font="font:LargeBoldSystemFont" color="0xFFFFFFFF" text="Scan to Connect" />
+            <Label id="qrUrlLabel" translation="[450, 65]" horizAlign="center" width="900"
+                font="font:SmallSystemFont" color="0xCCCCCCFF" text="" />
+            <Poster id="qrPoster" translation="[200, 100]" width="500" height="500"
+                loadingBitmapOpacity="0" />
+            <Label translation="[450, 620]" horizAlign="center" width="900"
+                font="font:MediumSystemFont" color="0x94A3B8FF"
+                text="Open phone camera and scan the QR code" />
+            <Label translation="[450, 660]" horizAlign="center" width="900"
+                font="font:MediumSystemFont" color="0x94A3B8FF"
+                text="to launch the CustomCuts remote control." />
+            <Label translation="[450, 720]" horizAlign="center" width="900"
+                font="font:SmallBoldSystemFont" color="0x64748BFF"
+                text="Press BACK to close" />
+        </Group>
+
+        <!-- Seek overlay (centered, shown on FF/RW/left/right) -->
+        <Group id="seekOverlay" visible="false" translation="[480, 440]">
+            <Rectangle width="960" height="200" color="0x000000CC" />
+            <Label id="seekTitleLabel"
+                translation="[480, 20]"
+                horizAlign="center" width="960"
+                font="font:MediumSystemFont" color="0xCCCCCCFF" text="" />
+            <Label id="seekTimeLabel"
+                translation="[480, 60]"
+                horizAlign="center" width="960"
+                font="font:LargeBoldSystemFont" color="0xFFFFFFFF" text="0:00:00 / 0:00:00" />
+            <Label id="seekPctLabel"
+                translation="[480, 110]"
+                horizAlign="center" width="960"
+                font="font:MediumBoldSystemFont" color="0xFFCC00FF" text="0%" />
+            <Rectangle translation="[40, 155]" width="880" height="12" color="0x333333FF" />
+            <Rectangle id="seekBarFill" translation="[40, 155]" width="0" height="12" color="0xFFCC00FF" />
         </Group>
         <QueueTask id="queueTask" />
         <CommandTask id="cmdTask" />
         <EventTask id="eventTask" />
         <DiscoveryTask id="discoveryTask" />
+        <FeaturedTask id="featuredTask" />
+        <PostCommandTask id="postCommandTask" />
         <Timer id="cmdTimer" duration="1" repeat="true" />
         <Timer id="eventTimer" duration="2" repeat="true" />
+        <Timer id="connectTimer" duration="15" repeat="false" />
+        <Timer id="seekHideTimer" duration="3" repeat="false" />
     </children>
 </component>

@@ -17,6 +17,7 @@
       <div class="queue-header">
         <h3>Video Queue</h3>
         <div class="queue-controls">
+          <button id="play-queue-btn" class="btn btn-small btn-primary" title="Play queue from the first video">Play</button>
           <button id="skip-queue-btn" class="btn btn-small btn-secondary" title="Skip to next">Skip</button>
           <button id="clear-queue-btn" class="btn btn-small btn-danger" title="Clear queue">Clear</button>
         </div>
@@ -47,6 +48,16 @@
     </section>
 
     <section id="video-controls" class="section hidden">
+      <div class="control-group">
+        <h3>Display Title</h3>
+        <div class="local-path-group">
+          <input type="text" id="title-override-input" placeholder="Custom title for this video...">
+          <button id="save-title-override-btn" class="btn btn-primary btn-small">Save</button>
+          <button id="clear-title-override-btn" class="btn btn-secondary btn-small">Clear</button>
+        </div>
+        <span id="title-override-status" class="feedback-status"></span>
+      </div>
+
       <div class="control-group">
         <h3>Quick Tags</h3>
         <div id="quick-tags-container" class="tag-buttons">
@@ -155,6 +166,16 @@
           </label>
           <input type="text" id="close-time-input" placeholder="mm:ss" pattern="[0-9]+:[0-5][0-9]">
         </div>
+      </div>
+
+      <div class="control-group">
+        <h3>Local File</h3>
+        <div class="local-path-group">
+          <input type="text" id="local-path-input" placeholder="C:\Videos\movie.mp4" style="flex:1">
+          <button id="save-local-path-btn" class="btn btn-primary btn-small">Save</button>
+          <button id="clear-local-path-btn" class="btn btn-secondary btn-small">Clear</button>
+        </div>
+        <span id="local-path-status" class="feedback-status"></span>
       </div>
 
       <div class="control-group">

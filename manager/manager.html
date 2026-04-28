@@ -77,12 +77,25 @@
         </div>
 
         <div class="filter-group">
+          <label>Video length:</label>
+          <select id="video-length-filter">
+            <option value="">Any</option>
+            <option value="15m">&gt; 15 min</option>
+            <option value="30m">&gt; 30 min</option>
+            <option value="45m">&gt; 45 min</option>
+            <option value="1h">&gt; 1 hour</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
           <label>Sort by:</label>
           <select id="sort-by">
             <option value="recent">Recently Tagged</option>
             <option value="rating">Highest Rated</option>
             <option value="tags">Most Tags</option>
             <option value="least-tags">Least Tags</option>
+            <option value="longest">Longest</option>
+            <option value="shortest">Shortest</option>
             <option value="alpha">Alphabetical (URL)</option>
           </select>
         </div>
