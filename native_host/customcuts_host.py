@@ -414,6 +414,30 @@ def resolve_video(entry_id, page_url, local_path=None):
             _resolve_cache[entry_id] = result
         return result
 
+    # file:// URLs are local files in disguise — yt-dlp refuses them by
+    # default for security reasons, so handle them ourselves the same way
+    # an explicit localPath would be handled.
+    if page_url and page_url.lower().startswith('file://'):
+        try:
+            path_from_url = urllib.request.url2pathname(urlparse(page_url).path)
+        except Exception as ex:
+            raise RuntimeError(f'unparseable file:// URL {page_url}: {ex}')
+        if os.path.isfile(path_from_url):
+            result = {
+                'direct_url': path_from_url,
+                'headers': {},
+                'resolved_at': now,
+                'content_type': (
+                    os.path.splitext(path_from_url)[1].lstrip('.') or 'mp4'
+                ),
+                'is_local': True,
+            }
+            with _state_lock:
+                _resolve_cache[entry_id] = result
+            return result
+        raise RuntimeError(
+            f'file:// URL points to missing path: {path_from_url}')
+
     with _state_lock:
         cached = _resolve_cache.get(entry_id)
         if cached and (now - cached['resolved_at']) < _RESOLVE_TTL:
