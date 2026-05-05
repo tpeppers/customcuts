@@ -1,10 +1,13 @@
 """HUD-style timestamped annotation overlays for the Kodi player.
 
 The extension stores annotations under each video record and the streaming
-host echoes them on `/queue.json` as `entry.annotations`. We render them
-with a non-modal `xbmcgui.WindowDialog` whose controls are pre-allocated
-into a pool — the controller calls `update(t)` per playback tick to swap
-in/out the annotations whose [startTime, endTime] window covers `t`.
+host echoes them on `/queue.json` as `entry.annotations`. We attach a pool
+of pre-allocated ControlImage + ControlLabel pairs directly to Kodi's
+fullscreen-video window (id 12005) — a non-modal `WindowDialog` would
+sometimes render *behind* the active video player and silently look like
+the overlay isn't working at all. The controller calls `update(t)` per
+playback tick to swap in/out the annotations whose [startTime, endTime]
+window covers `t`.
 
 We deliberately keep the rendering simple: a colored background panel
 (ControlImage tinted via colorDiffuse over a 1×1 white PNG written once
@@ -15,6 +18,7 @@ needs per-shape PNG assets we don't ship.
 """
 import base64
 import os
+import time
 
 import xbmc
 import xbmcaddon
@@ -25,6 +29,19 @@ try:
     _translate = xbmcvfs.translatePath
 except (ImportError, AttributeError):
     _translate = getattr(xbmc, 'translatePath', lambda p: p)
+
+
+LOG_TAG = '[CustomCuts.annotations]'
+
+# Kodi window id for the fullscreen-video player. This is the window that
+# becomes active when xbmc.Player starts playback in fullscreen mode.
+WINDOW_FULLSCREEN_VIDEO = 12005
+
+
+def _log(msg, level=None):
+    if level is None:
+        level = xbmc.LOGINFO
+    xbmc.log(f'{LOG_TAG} {msg}', level)
 
 
 # 1×1 fully-opaque white PNG. ControlImage colorDiffuse multiplies into
@@ -52,7 +69,8 @@ def _ensure_white_png():
         try:
             with open(path, 'wb') as f:
                 f.write(base64.b64decode(_WHITE_PNG_B64))
-        except Exception:
+        except Exception as e:
+            _log(f'failed writing tint texture to {path}: {e}', xbmc.LOGWARNING)
             return ''
     return path
 
@@ -85,19 +103,25 @@ def _font_for_size(px):
 
 class AnnotationOverlay:
     MAX_SLOTS = 16
+    # When open() runs, the player may have just started and the
+    # fullscreen-video window may not yet be active. Poll briefly for it.
+    OPEN_WAIT_S = 4.0
+    OPEN_POLL_S = 0.1
 
     def __init__(self):
-        self._dialog = None
-        self._slots = []   # list of {bg: ControlImage, label: ControlLabel}
-        self._loaded = []  # currently loaded annotations for this video
+        self._window = None      # xbmcgui.Window wrapper for 12005
+        self._slots = []         # list of {bg: ControlImage, label: ControlLabel}
+        self._loaded = []        # current annotation list for this item
         self._screen_w = 1920
         self._screen_h = 1080
         self._tex = ''
 
     # --- lifecycle ----------------------------------------------------
     def open(self):
-        """Create the dialog + slot controls. Idempotent."""
-        if self._dialog is not None:
+        """Attach the slot controls to Kodi's fullscreen-video window.
+        Idempotent. Safe to call before fullscreen has fully kicked in;
+        we poll briefly for the window to become active."""
+        if self._window is not None:
             return
         self._tex = _ensure_white_png()
         try:
@@ -105,42 +129,95 @@ class AnnotationOverlay:
             self._screen_h = xbmcgui.getScreenHeight()
         except Exception:
             pass
-        self._dialog = xbmcgui.WindowDialog()
+
+        deadline = time.time() + self.OPEN_WAIT_S
+        while time.time() < deadline:
+            try:
+                cur = xbmcgui.getCurrentWindowId()
+            except Exception:
+                cur = -1
+            if cur == WINDOW_FULLSCREEN_VIDEO:
+                break
+            time.sleep(self.OPEN_POLL_S)
+        else:
+            _log(
+                f'fullscreen-video window did not become active within '
+                f'{self.OPEN_WAIT_S}s; attaching controls anyway',
+                xbmc.LOGWARNING,
+            )
+
+        try:
+            self._window = xbmcgui.Window(WINDOW_FULLSCREEN_VIDEO)
+        except Exception as e:
+            _log(f'Window({WINDOW_FULLSCREEN_VIDEO}) failed: {e}', xbmc.LOGERROR)
+            self._window = None
+            return
+
+        controls = []
         for _ in range(self.MAX_SLOTS):
             bg = xbmcgui.ControlImage(
-                0, 0, 1, 1, self._tex, colorDiffuse='00000000',
+                0, 0, 1, 1, self._tex or '', colorDiffuse='00000000',
             )
             label = xbmcgui.ControlLabel(
                 0, 0, 1, 1, '',
                 font=_font_for_size(16),
                 textColor='FFFFFFFF',
             )
-            self._dialog.addControls([bg, label])
-            bg.setVisible(False)
-            label.setVisible(False)
             self._slots.append({'bg': bg, 'label': label})
-        self._dialog.show()
+            controls.append(bg)
+            controls.append(label)
+
+        try:
+            self._window.addControls(controls)
+        except Exception as e:
+            _log(f'addControls failed: {e}', xbmc.LOGERROR)
+            self._slots = []
+            self._window = None
+            return
+
+        for s in self._slots:
+            try:
+                s['bg'].setVisible(False)
+                s['label'].setVisible(False)
+            except Exception:
+                pass
+
+        _log(
+            f'overlay attached: {len(self._slots)} slots, '
+            f'screen={self._screen_w}x{self._screen_h}, tex={bool(self._tex)}'
+        )
 
     def close(self):
-        if self._dialog is None:
+        if self._window is None:
             return
-        try:
-            self._dialog.close()
-        except Exception:
-            pass
-        self._dialog = None
+        for s in self._slots:
+            for ctrl_key in ('bg', 'label'):
+                try:
+                    self._window.removeControl(s[ctrl_key])
+                except Exception:
+                    # The window may have already torn down (e.g. user
+                    # exited fullscreen video before we got here). The
+                    # controls are owned by the addon's Python objects
+                    # and will be GC'd; nothing to leak.
+                    pass
+        self._window = None
         self._slots = []
         self._loaded = []
+        _log('overlay detached')
 
     # --- per-video state ----------------------------------------------
     def set_annotations(self, anns):
         """Replace the current annotation list (called on each new item)."""
         self._loaded = list(anns or [])
+        _log(f'set_annotations: {len(self._loaded)} for current item')
         # Hide everything immediately so a stale annotation from the
         # previous item never flashes onto the new one.
         for s in self._slots:
-            s['bg'].setVisible(False)
-            s['label'].setVisible(False)
+            try:
+                s['bg'].setVisible(False)
+                s['label'].setVisible(False)
+            except Exception:
+                pass
 
     # --- per-tick render ----------------------------------------------
     def update(self, t):
@@ -149,7 +226,7 @@ class AnnotationOverlay:
         Designed to be called at the controller's monitor cadence
         (~4 Hz). With at most MAX_SLOTS visible controls and only field
         assignments per call, this stays well under 1 ms."""
-        if not self._dialog:
+        if not self._window or not self._slots:
             return
         if not self._loaded:
             return
@@ -165,13 +242,19 @@ class AnnotationOverlay:
                 continue
             if not (start <= t <= end):
                 continue
-            self._apply_to_slot(self._slots[slot_idx], ann)
-            slot_idx += 1
+            try:
+                self._apply_to_slot(self._slots[slot_idx], ann)
+                slot_idx += 1
+            except Exception as e:
+                _log(f'apply slot {slot_idx} failed: {e}', xbmc.LOGWARNING)
 
         # Hide unused slots
-        for i in range(slot_idx, self.MAX_SLOTS):
-            self._slots[i]['bg'].setVisible(False)
-            self._slots[i]['label'].setVisible(False)
+        for i in range(slot_idx, len(self._slots)):
+            try:
+                self._slots[i]['bg'].setVisible(False)
+                self._slots[i]['label'].setVisible(False)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     def _apply_to_slot(self, s, ann):
@@ -183,8 +266,8 @@ class AnnotationOverlay:
 
         px = int(bx * self._screen_w)
         py = int(by * self._screen_h)
-        pw = int(bw * self._screen_w)
-        ph = int(bh * self._screen_h)
+        pw = max(1, int(bw * self._screen_w))
+        ph = max(1, int(bh * self._screen_h))
 
         style = ann.get('style') or {}
         bg_hex = style.get('bgColor') or '#000000'
