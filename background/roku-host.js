@@ -10,6 +10,15 @@
 
 const HOST_NAME = 'com.customcuts.stream_host';
 
+// Persisted hosting intent. The MV3 service worker can be evicted at any
+// time; when it wakes back up (e.g. on a chrome.storage change) the in-
+// memory nativePort is null again. Without a persistent flag, every
+// post-eviction storage change silently skips pushCurrentQueue because
+// `if (nativePort && ...)` short-circuits, so the host quietly serves a
+// stale /queue.json. We persist start_hosting's args here, clear them
+// on stop_hosting, and re-attach on worker boot when the flag is set.
+const HOSTING_INTENT_KEY = '_hostingIntent';
+
 const FEATURED_CLASSICS_NAME = 'Featured Videos - Classics';
 const FEATURED_INCOMING_NAME = 'Featured Videos - Incoming';
 
@@ -245,6 +254,11 @@ export async function startHosting(port = 8787, bindAddr = '0.0.0.0') {
     'hosting_started',
   );
   if (resp?.ok) {
+    try {
+      await chrome.storage.local.set({
+        [HOSTING_INTENT_KEY]: { port, bindAddr, ts: Date.now() },
+      });
+    } catch (_) {}
     await pushCurrentQueue();
     await pushCurrentPlaylists();
   }
@@ -252,6 +266,7 @@ export async function startHosting(port = 8787, bindAddr = '0.0.0.0') {
 }
 
 export async function stopHosting() {
+  try { await chrome.storage.local.remove(HOSTING_INTENT_KEY); } catch (_) {}
   if (!nativePort) {
     lastStatus.hosting = false;
     return { ok: true, already_stopped: true };
@@ -265,9 +280,47 @@ export async function stopHosting() {
   return resp;
 }
 
+// Re-attach to the native host after a service-worker eviction, if the
+// user previously asked us to host. Caller must `await` so the freshly
+// connected port is in place before any pushCurrentQueue runs.
+async function ensureHostingFromIntent() {
+  if (nativePort) return true;
+  let intent;
+  try {
+    const data = await chrome.storage.local.get(HOSTING_INTENT_KEY);
+    intent = data[HOSTING_INTENT_KEY];
+  } catch (_) {
+    return false;
+  }
+  if (!intent) return false;
+  try {
+    const resp = await sendCommand(
+      {
+        cmd: 'start_hosting',
+        port: intent.port || 8787,
+        bindAddr: intent.bindAddr || '0.0.0.0',
+      },
+      'hosting_started',
+    );
+    if (!resp?.ok) {
+      console.warn('[roku-host] reattach failed', resp);
+      return false;
+    }
+    console.log('[roku-host] reattached to native host after worker wake');
+    return true;
+  } catch (e) {
+    console.warn('[roku-host] reattach error', e);
+    return false;
+  }
+}
+
 export async function getStatus() {
   if (!nativePort) {
-    return { ok: true, hosting: false, ...lastStatus };
+    // Worker may have been evicted while hosting was active. If the
+    // user previously asked us to host, reattach so the popup shows
+    // the live state instead of a misleading "not hosting".
+    const reattached = await ensureHostingFromIntent();
+    if (!reattached) return { ok: true, hosting: false, ...lastStatus };
   }
   return sendCommand({ cmd: 'get_status' }, 'status');
 }
@@ -893,12 +946,30 @@ chrome.storage.onChanged.addListener((changes, area) => {
       }
     }
   }
-  if (nativePort && (relevantTopLevel || perVideoChanged)) {
-    pushCurrentQueue().catch(e =>
-      console.error('[roku-host] pushCurrentQueue failed', e));
+  if (relevantTopLevel || perVideoChanged) {
+    (async () => {
+      if (!nativePort) {
+        const ok = await ensureHostingFromIntent();
+        if (!ok) return;
+      }
+      try {
+        await pushCurrentQueue();
+      } catch (e) {
+        console.error('[roku-host] pushCurrentQueue failed', e);
+      }
+    })();
   }
-  if (nativePort && 'playlists' in changes) {
-    pushCurrentPlaylists().catch(e =>
-      console.error('[roku-host] pushCurrentPlaylists failed', e));
+  if ('playlists' in changes) {
+    (async () => {
+      if (!nativePort) {
+        const ok = await ensureHostingFromIntent();
+        if (!ok) return;
+      }
+      try {
+        await pushCurrentPlaylists();
+      } catch (e) {
+        console.error('[roku-host] pushCurrentPlaylists failed', e);
+      }
+    })();
   }
 });
