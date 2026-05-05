@@ -83,6 +83,9 @@
     },
     "quicktag-review": {
       "description": "Add REVIEW quicktag to current video (unbound by default — set at chrome://extensions/shortcuts)"
+    },
+    "toggle-annotation-editor": {
+      "description": "Open/close the text-comments annotation editor (unbound by default — set at chrome://extensions/shortcuts)"
     }
   }
 }

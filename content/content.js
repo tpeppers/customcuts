@@ -659,6 +659,13 @@
       if (annotationOverlay) {
         fullscreenElement.appendChild(annotationOverlay);
       }
+      // The props panel is a fixed-position child of <body>; the
+      // fullscreen element hides everything outside its subtree, so we
+      // have to reparent it too or it disappears the moment the user
+      // F11s into the video.
+      if (annotationPropsPanel && annotationPropsPanel.parentNode) {
+        fullscreenElement.appendChild(annotationPropsPanel);
+      }
     } else {
       // Exiting fullscreen - move overlays back to body
       if (subtitleOverlay) {
@@ -670,6 +677,9 @@
       }
       if (annotationOverlay) {
         document.body.appendChild(annotationOverlay);
+      }
+      if (annotationPropsPanel && annotationPropsPanel.parentNode) {
+        document.body.appendChild(annotationPropsPanel);
       }
     }
   }
@@ -1637,7 +1647,8 @@
     if (!annotationPropsPanel) {
       annotationPropsPanel = document.createElement('div');
       annotationPropsPanel.className = 'custom-cuts-annotation-props';
-      document.body.appendChild(annotationPropsPanel);
+      const fs = document.fullscreenElement || document.webkitFullscreenElement;
+      (fs || document.body).appendChild(annotationPropsPanel);
     }
     const style = ann.style || defaultAnnotationStyle();
     const shape = ann.shape || defaultAnnotationShape();
@@ -2246,6 +2257,17 @@
           enterAnnotationEditor();
           sendResponse({ success: true });
         });
+        return true;
+
+      case 'toggleAnnotationEditor':
+        if (annotationEditorActive) {
+          exitAnnotationEditor().then(() => sendResponse({ success: true, state: 'closed' }));
+        } else {
+          Promise.all([loadAnnotations(), loadAnnotationEditWindow()]).then(() => {
+            enterAnnotationEditor();
+            sendResponse({ success: true, state: 'open' });
+          });
+        }
         return true;
 
       case 'exitAnnotationEditor':

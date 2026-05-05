@@ -1181,6 +1181,10 @@ chrome.commands.onCommand.addListener(async (command) => {
     case 'quicktag-review':
       await addQuicktagToCurrentVideo('REVIEW');
       break;
+
+    case 'toggle-annotation-editor':
+      await sendToActiveTab({ action: 'toggleAnnotationEditor' });
+      break;
   }
 });
 
