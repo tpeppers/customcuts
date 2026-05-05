@@ -38,6 +38,10 @@
         <!-- Video player (fullscreen) -->
         <Video id="videoPlayer" visible="false" width="1920" height="1080" translation="[0, 0]" />
 
+        <!-- Annotation overlay (HUD-style timestamped text comments).
+             Slot groups are created dynamically in HomeScene.brs initAnnotationSlots(). -->
+        <Group id="annotationOverlay" translation="[0, 0]" visible="false" />
+
         <!-- Progress bar (inside title-safe bottom) -->
         <Group id="progressGroup" translation="[90, 940]" visible="false">
             <Label id="progressTimeLabel" translation="[0, -28]" font="font:SmallBoldSystemFont" color="0xFFFFFFFF" text="0:00 / 0:00" />

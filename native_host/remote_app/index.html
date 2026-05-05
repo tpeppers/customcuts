@@ -246,6 +246,19 @@ body {
   // ------------------------------------------------------------------
   var LS_KEY = 'customcuts-remote-v1';
 
+  // Drop any path from a host URL — cfg.host must be just scheme://host:port
+  // because endpoints like /state.json are appended directly. The QR URL
+  // contains /remote, so we strip it (and any other path) defensively.
+  function normalizeHost(h) {
+    if (!h) return h;
+    try {
+      var u = new URL(h);
+      return u.protocol + '//' + u.host;
+    } catch (e) {
+      return h.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
+    }
+  }
+
   function readFragment() {
     var hash = (location.hash || '').replace(/^#/, '');
     if (!hash) return null;
@@ -280,6 +293,7 @@ body {
 
   var cfg = readFragment() || loadStored();
   if (cfg) {
+    cfg.host = normalizeHost(cfg.host);
     save(cfg);
     // Drop the fragment so the token doesn't show in the URL bar
     if (location.hash) history.replaceState(null, '', location.pathname);
@@ -615,7 +629,7 @@ body {
     if (!raw) return;
     var m = raw.match(/^(https?:\/\/[^#]+)#(?:tok=)?(.+)$/);
     if (!m) { alert('URL must look like http://host:port#tok=xxx'); return; }
-    cfg = { host: m[1].replace(/\/$/, ''), token: m[2] };
+    cfg = { host: normalizeHost(m[1]), token: m[2] };
     save(cfg);
     init();
   });

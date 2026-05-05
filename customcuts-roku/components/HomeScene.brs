@@ -37,10 +37,14 @@ sub init()
     m.seekPctLabel = m.top.findNode("seekPctLabel")
     m.seekBarFill = m.top.findNode("seekBarFill")
     m.seekHideTimer = m.top.findNode("seekHideTimer")
+    m.annotationOverlay = m.top.findNode("annotationOverlay")
 
     m.queue = []
     m.currentIndex = -1
     m.cutsState = invalid
+    m.annotations = []
+    m.annSlots = []
+    initAnnotationSlots()
     m.commandSeq = 0
     m.hostDialog = invalid
     m.lastReportedState = ""
@@ -69,11 +73,24 @@ sub init()
 
     m.top.setFocus(true)
 
-    ' Default host/token used when no host has been saved to registry yet.
-    ' Once the user manually enters a host via the keyboard dialog, that
-    ' overrides this default in the registry for all future launches.
+    ' Default host/token, plus the build stamp this zip was packaged with.
+    ' build.py rewrites all three values per build (LAN IP, current host
+    ' token, unix timestamp). When the embedded DEFAULT_BUILD differs from
+    ' the build the registry was last initialized against, we overwrite
+    ' hostUrl + authToken with the fresh defaults -- keeping every sideload
+    ' aligned with whatever token the dev host currently uses, instead of
+    ' silently reusing a stale one from a previous install.
     DEFAULT_HOST = "http://192.168.254.76:8787"
     DEFAULT_TOKEN = "7b7ff70ab148f759487a7083eff1e497"
+    DEFAULT_BUILD = "0"
+
+    savedBuild = loadBuildStamp()
+    if savedBuild <> DEFAULT_BUILD then
+        print "build stamp changed ("; savedBuild; " -> "; DEFAULT_BUILD; "), resetting host/token to packaged defaults"
+        saveHostUrl(DEFAULT_HOST)
+        saveAuthToken(DEFAULT_TOKEN)
+        saveBuildStamp(DEFAULT_BUILD)
+    end if
 
     m.hostUrl = loadHostUrl()
     m.authToken = loadAuthToken()
@@ -247,6 +264,18 @@ end function
 sub saveAuthToken(tok as string)
     reg = CreateObject("roRegistrySection", "CustomCuts")
     reg.Write("authToken", tok)
+    reg.Flush()
+end sub
+
+function loadBuildStamp() as string
+    reg = CreateObject("roRegistrySection", "CustomCuts")
+    if reg.Exists("buildStamp") then return reg.Read("buildStamp")
+    return ""
+end function
+
+sub saveBuildStamp(stamp as string)
+    reg = CreateObject("roRegistrySection", "CustomCuts")
+    reg.Write("buildStamp", stamp)
     reg.Flush()
 end sub
 
@@ -508,6 +537,7 @@ sub playIndex(idx as integer)
     entry = m.queue[idx]
 
     m.cutsState = buildCutsState(entry)
+    setAnnotationsForCurrentVideo(entry.annotations)
 
     content = CreateObject("roSGNode", "ContentNode")
     content.url = entry.play_url
@@ -582,10 +612,191 @@ function buildCutsState(entry as object) as object
     return state
 end function
 
+' Annotations (HUD-style timestamped text comments) ----------------------
+' Pool of pre-allocated slots to avoid per-frame node allocation.
+' Each slot is a Group containing a Rectangle (background) and a Label.
+' Annotations beyond ANN_MAX_SLOTS are silently dropped per-frame.
+sub initAnnotationSlots()
+    ANN_MAX_SLOTS = 16
+    for i = 0 to ANN_MAX_SLOTS - 1
+        slot = m.annotationOverlay.createChild("Group")
+        slot.visible = false
+        bg = slot.createChild("Rectangle")
+        bg.color = "0x000000CC"
+        lbl = slot.createChild("Label")
+        lbl.color = "0xFFFFFFFF"
+        lbl.font = "font:MediumSystemFont"
+        lbl.horizAlign = "left"
+        lbl.vertAlign = "top"
+        lbl.wrap = true
+        m.annSlots.push({ slot: slot, bg: bg, lbl: lbl })
+    end for
+end sub
+
+sub setAnnotationsForCurrentVideo(rawAnns as object)
+    m.annotations = []
+    if rawAnns = invalid then
+        hideAllAnnotations()
+        return
+    end if
+    if type(rawAnns) <> "roArray" then
+        hideAllAnnotations()
+        return
+    end if
+    for each a in rawAnns
+        if a <> invalid then m.annotations.push(a)
+    end for
+    if m.annotations.count() = 0 then hideAllAnnotations()
+end sub
+
+sub updateAnnotations(curPos as float)
+    if m.annotations.count() = 0 then return
+    if not m.videoPlayer.visible then
+        m.annotationOverlay.visible = false
+        return
+    end if
+
+    activeIdx = 0
+    for each ann in m.annotations
+        if activeIdx >= m.annSlots.count() then exit for
+        if ann <> invalid then
+            s = 0
+            e = 0
+            if ann.startTime <> invalid then s = ann.startTime
+            if ann.endTime <> invalid then e = ann.endTime
+            if curPos >= s and curPos <= e then
+                applyAnnotationToSlot(m.annSlots[activeIdx], ann)
+                activeIdx = activeIdx + 1
+            end if
+        end if
+    end for
+
+    for i = activeIdx to m.annSlots.count() - 1
+        m.annSlots[i].slot.visible = false
+    end for
+
+    m.annotationOverlay.visible = (activeIdx > 0)
+end sub
+
+sub hideAllAnnotations()
+    for each s in m.annSlots
+        s.slot.visible = false
+    end for
+    m.annotationOverlay.visible = false
+end sub
+
+sub applyAnnotationToSlot(s as object, ann as object)
+    box = ann.box
+    if box = invalid then box = { x: 0.35, y: 0.4, w: 0.3, h: 0.12 }
+
+    bx = clampF(box.x, 0, 1)
+    by = clampF(box.y, 0, 1)
+    bw = clampF(box.w, 0.04, 1)
+    bh = clampF(box.h, 0.03, 1)
+
+    px = Int(bx * 1920)
+    py = Int(by * 1080)
+    pw = Int(bw * 1920)
+    ph = Int(bh * 1080)
+
+    style = ann.style
+    bgHex = "#000000"
+    bgOpacity = 80
+    fgHex = "#ffffff"
+    fontSize = 16
+    if style <> invalid then
+        if style.bgColor <> invalid then bgHex = style.bgColor
+        if style.bgOpacity <> invalid then bgOpacity = style.bgOpacity
+        if style.textColor <> invalid then fgHex = style.textColor
+        if style.fontSize <> invalid then fontSize = style.fontSize
+    end if
+
+    s.slot.translation = [px, py]
+    s.bg.width = pw
+    s.bg.height = ph
+    s.bg.color = hexRgbToRokuRgba(bgHex, bgOpacity)
+    s.lbl.color = hexRgbToRokuRgba(fgHex, 100)
+    s.lbl.translation = [12, 8]
+    s.lbl.width = pw - 24
+    s.lbl.height = ph - 16
+    s.lbl.text = annText(ann)
+    ' Roku 'font' field accepts a uri or built-in font ref. We approximate
+    ' by picking a discrete built-in size based on annotation fontSize.
+    if fontSize >= 28 then
+        s.lbl.font = "font:LargeBoldSystemFont"
+    else if fontSize >= 20 then
+        s.lbl.font = "font:MediumBoldSystemFont"
+    else if fontSize >= 14 then
+        s.lbl.font = "font:MediumSystemFont"
+    else
+        s.lbl.font = "font:SmallSystemFont"
+    end if
+    s.slot.visible = true
+end sub
+
+function annText(ann as object) as string
+    if ann.text <> invalid then return ann.text
+    return ""
+end function
+
+function clampF(v as dynamic, lo as float, hi as float) as float
+    if v = invalid then return lo
+    f = 0.0
+    if type(v) = "Float" or type(v) = "roFloat" then
+        f = v
+    else if type(v) = "Double" or type(v) = "roDouble" then
+        f = v
+    else if type(v) = "Integer" or type(v) = "roInt" or type(v) = "roInteger" then
+        f = v
+    else
+        return lo
+    end if
+    if f < lo then return lo
+    if f > hi then return hi
+    return f
+end function
+
+' "#rrggbb" + opacity 0..100 -> "0xRRGGBBAA"
+function hexRgbToRokuRgba(hex as string, opacity as integer) as string
+    if hex = invalid or len(hex) < 7 then return "0x000000FF"
+    rr = upperHex(mid(hex, 2, 2))
+    gg = upperHex(mid(hex, 4, 2))
+    bb = upperHex(mid(hex, 6, 2))
+    if opacity < 0 then opacity = 0
+    if opacity > 100 then opacity = 100
+    aInt = Int(opacity * 255 / 100)
+    aHex = byteToHex(aInt)
+    return "0x" + rr + gg + bb + aHex
+end function
+
+function upperHex(s as string) as string
+    out = ""
+    for i = 1 to len(s)
+        c = mid(s, i, 1)
+        ascC = Asc(c)
+        if ascC >= 97 and ascC <= 102 then
+            out = out + chr(ascC - 32)
+        else
+            out = out + c
+        end if
+    end for
+    return out
+end function
+
+function byteToHex(n as integer) as string
+    if n < 0 then n = 0
+    if n > 255 then n = 255
+    digits = "0123456789ABCDEF"
+    hi = n \ 16
+    lo = n mod 16
+    return mid(digits, hi + 1, 1) + mid(digits, lo + 1, 1)
+end function
+
 ' Video playback observers ------------------------------------------------
 sub onVideoPosition()
     if m.cutsState = invalid then return
     curPos = m.videoPlayer.position
+    updateAnnotations(curPos)
 
     ' Drive on-TV progress bar whenever position updates
     dur = m.videoPlayer.duration
@@ -684,6 +895,7 @@ sub advanceQueue()
         m.videoPlayer.control = "stop"
         m.videoPlayer.visible = false
         m.progressGroup.visible = false
+        hideAllAnnotations()
         m.statusLabel.text = "Queue complete."
         m.queueList.setFocus(true)
         reportEvent("queue_complete")
@@ -884,6 +1096,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
             m.videoPlayer.visible = false
             m.progressGroup.visible = false
             m.seekOverlay.visible = false
+            hideAllAnnotations()
             m.statusLabel.text = m.queue.count().toStr() + " videos in queue. Press OK to play."
             m.queueList.setFocus(true)
             reportEvent("state_change")

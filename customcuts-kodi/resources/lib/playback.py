@@ -17,6 +17,7 @@ import time
 import xbmc
 import xbmcgui
 
+from .annotations import AnnotationOverlay
 from .api import ApiError
 from .player import CCPlayer
 
@@ -62,6 +63,7 @@ class PlaybackController:
         # Tracks which queue indices we've already told the extension to
         # remove from videoQueue, so we don't double-post.
         self._marked_played = set()
+        self.annotations = AnnotationOverlay()
 
     # -----------------------------------------------------------------
     def run(self):
@@ -102,15 +104,32 @@ class PlaybackController:
         self.last_event_ts = time.time()
         self.last_cmd_poll_ts = 0.0
 
+        try:
+            self.annotations.open()
+            self._load_current_annotations()
+        except Exception as e:
+            log(f'annotations.open failed: {e}', xbmc.LOGWARNING)
+
         self._monitor_loop()
 
         self._try_post_event('queue_complete')
+        try:
+            self.annotations.close()
+        except Exception:
+            pass
         try:
             if self.player.isPlaying():
                 self.player.stop()
         except Exception:
             pass
         log('playback loop exiting')
+
+    def _load_current_annotations(self):
+        if not (0 <= self.idx < len(self.queue)):
+            self.annotations.set_annotations([])
+            return
+        anns = self.queue[self.idx].get('annotations') or []
+        self.annotations.set_annotations(anns)
 
     # -----------------------------------------------------------------
     def _build_playlist(self):
@@ -174,6 +193,7 @@ class PlaybackController:
                     # backwards (Prev button) shouldn't remove anything.
                     if pos > prev_idx:
                         self._mark_played(prev_idx)
+                    self._load_current_annotations()
                     self._try_post_event('playback_started')
             else:
                 # Not playing right now. Is this a real stop or a gap?
@@ -202,6 +222,11 @@ class PlaybackController:
             if playing and now - self.last_event_ts >= self.EVENT_POST_INTERVAL_S:
                 self._try_post_event('position')
                 self.last_event_ts = now
+            if playing:
+                try:
+                    self.annotations.update(self.player.safe_time())
+                except Exception as e:
+                    log(f'annotations.update failed: {e}', xbmc.LOGWARNING)
 
             if self.monitor.waitForAbort(0.25):
                 return
@@ -313,6 +338,8 @@ class PlaybackController:
                 if not self.monitor.waitForAbort(0.5):
                     xbmc.executebuiltin(
                         f'Playlist.PlayOffset(video,{target_idx})')
+            self.idx = target_idx
+            self._load_current_annotations()
         except Exception as e:
             log(f'refresh_queue replay failed: {e}', xbmc.LOGWARNING)
 

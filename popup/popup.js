@@ -1503,6 +1503,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     setTimeout(() => { titleOverrideStatus.textContent = ''; }, 2000);
   });
 
+  // ADD TEXT-COMMENTS — opens the annotation editor in the active tab
+  const addAnnotationsBtn = document.getElementById('add-annotations-btn');
+  if (addAnnotationsBtn) {
+    addAnnotationsBtn.addEventListener('click', async () => {
+      try {
+        await chrome.tabs.sendMessage(currentTab.id, { action: 'enterAnnotationEditor' });
+        window.close();
+      } catch (e) {
+        alert('Could not open annotation editor: ' + (e?.message || e));
+      }
+    });
+  }
+
   managerBtn.addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('manager/manager.html') });
   });

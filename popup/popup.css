@@ -291,6 +291,32 @@ h3 {
   color: white;
 }
 
+.annotations-launcher {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.annotations-launcher-btn {
+  background: #8e44ad;
+  color: white;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 10px 14px;
+  flex: 0 0 auto;
+}
+
+.annotations-launcher-btn:hover {
+  background: #7d3c98;
+}
+
+.annotations-launcher-hint {
+  font-size: 11px;
+  color: #777;
+  flex: 1;
+}
+
 .download-video-btn {
   width: 100%;
   padding: 10px 14px;

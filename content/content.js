@@ -56,6 +56,19 @@
   let popTags = [];
   let activePopTagElements = new Map(); // Maps tag id to DOM element
 
+  // Annotation state (HUD-style timestamped comments separate from tags)
+  let annotationOverlay = null;
+  let annotationSvg = null;
+  let annotationToolbar = null;
+  let annotationPropsPanel = null;
+  let annotations = [];
+  let annotationEditorActive = false;
+  let selectedAnnotationId = null;
+  let annotationDrag = null; // { id, kind: 'move'|'resize'|'shape', startX, startY, orig }
+  let annotationRectSyncRaf = null;
+  let annotationWasPlaying = false;
+  let annotationEditWindow = 10; // seconds; ± window around currentTime in editor mode
+
   // Display settings
   let subtitleStyle = null;
   let popTagStyle = null;
@@ -323,9 +336,12 @@
       setupVideoListeners();
       createSubtitleOverlay();
       createPopTagOverlay();
+      createAnnotationOverlay();
       loadVideoSettings();
       loadPopTags();
+      loadAnnotations();
       loadDisplaySettings();
+      startAnnotationRectSync();
     }
   }
 
@@ -640,6 +656,9 @@
       if (popTagContainer) {
         fullscreenElement.appendChild(popTagContainer);
       }
+      if (annotationOverlay) {
+        fullscreenElement.appendChild(annotationOverlay);
+      }
     } else {
       // Exiting fullscreen - move overlays back to body
       if (subtitleOverlay) {
@@ -648,6 +667,9 @@
       }
       if (popTagContainer) {
         document.body.appendChild(popTagContainer);
+      }
+      if (annotationOverlay) {
+        document.body.appendChild(annotationOverlay);
       }
     }
   }
@@ -991,6 +1013,740 @@
   }
 
   // ============================================================================
+  // Annotation Overlay (HUD-style timestamped comments)
+  // ============================================================================
+
+  const ANNOTATION_SVG_NS = 'http://www.w3.org/2000/svg';
+
+  function createAnnotationOverlay() {
+    if (annotationOverlay) return;
+
+    annotationOverlay = document.createElement('div');
+    annotationOverlay.id = 'custom-cuts-annotation-overlay';
+    annotationOverlay.className = 'custom-cuts-annotation-overlay';
+
+    annotationSvg = document.createElementNS(ANNOTATION_SVG_NS, 'svg');
+    annotationSvg.setAttribute('class', 'custom-cuts-annotation-svg');
+    annotationSvg.setAttribute('preserveAspectRatio', 'none');
+
+    // Arrow marker definition
+    const defs = document.createElementNS(ANNOTATION_SVG_NS, 'defs');
+    const marker = document.createElementNS(ANNOTATION_SVG_NS, 'marker');
+    marker.setAttribute('id', 'cc-arrowhead');
+    marker.setAttribute('viewBox', '0 0 10 10');
+    marker.setAttribute('refX', '8');
+    marker.setAttribute('refY', '5');
+    marker.setAttribute('markerWidth', '6');
+    marker.setAttribute('markerHeight', '6');
+    marker.setAttribute('orient', 'auto-start-reverse');
+    const markerPath = document.createElementNS(ANNOTATION_SVG_NS, 'path');
+    markerPath.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z');
+    markerPath.setAttribute('fill', 'context-stroke');
+    marker.appendChild(markerPath);
+    defs.appendChild(marker);
+    annotationSvg.appendChild(defs);
+
+    annotationOverlay.appendChild(annotationSvg);
+    document.body.appendChild(annotationOverlay);
+  }
+
+  function startAnnotationRectSync() {
+    if (annotationRectSyncRaf) return;
+    let lastW = 0, lastH = 0;
+    const tick = () => {
+      syncAnnotationOverlayToVideo();
+      // Re-render shapes when overlay size changes (resize, fullscreen, etc.)
+      if (annotationOverlay) {
+        const r = annotationOverlay.getBoundingClientRect();
+        if (Math.abs(r.width - lastW) > 0.5 || Math.abs(r.height - lastH) > 0.5) {
+          lastW = r.width;
+          lastH = r.height;
+          renderAnnotations();
+        }
+      }
+      annotationRectSyncRaf = requestAnimationFrame(tick);
+    };
+    annotationRectSyncRaf = requestAnimationFrame(tick);
+  }
+
+  function syncAnnotationOverlayToVideo() {
+    if (!annotationOverlay || !videoElement) return;
+    const r = videoElement.getBoundingClientRect();
+    // Only show overlay if video is visible and has size
+    if (r.width < 10 || r.height < 10) {
+      annotationOverlay.style.display = 'none';
+      return;
+    }
+    annotationOverlay.style.display = '';
+    annotationOverlay.style.left = r.left + 'px';
+    annotationOverlay.style.top = r.top + 'px';
+    annotationOverlay.style.width = r.width + 'px';
+    annotationOverlay.style.height = r.height + 'px';
+  }
+
+  async function loadAnnotations() {
+    const videoId = getVideoId();
+    if (!videoId) return;
+    try {
+      const data = await chrome.storage.local.get(videoId);
+      const videoData = data[videoId] || {};
+      annotations = Array.isArray(videoData.annotations) ? videoData.annotations : [];
+      renderAnnotations();
+    } catch (e) {
+      console.error('Failed to load annotations:', e);
+      annotations = [];
+    }
+  }
+
+  async function saveAnnotations() {
+    const videoId = getVideoId();
+    if (!videoId) return;
+    const data = await chrome.storage.local.get(videoId);
+    const videoData = data[videoId] || {};
+    videoData.annotations = annotations;
+    await chrome.storage.local.set({ [videoId]: videoData });
+  }
+
+  async function loadAnnotationEditWindow() {
+    try {
+      const { annotationEditWindow: w } = await chrome.storage.local.get('annotationEditWindow');
+      const n = Number(w);
+      if (Number.isFinite(n) && n >= 0) annotationEditWindow = n;
+    } catch (_) { /* keep default */ }
+  }
+
+  async function saveAnnotationEditWindow(seconds) {
+    const n = Math.max(0, Math.min(36000, Number(seconds) || 0));
+    annotationEditWindow = n;
+    try {
+      await chrome.storage.local.set({ annotationEditWindow: n });
+    } catch (_) {}
+  }
+
+  function defaultAnnotationStyle() {
+    return {
+      fontSize: 16,
+      textColor: '#ffffff',
+      bgColor: '#000000',
+      bgOpacity: 80,
+      borderColor: '#ffffff'
+    };
+  }
+
+  function defaultAnnotationShape() {
+    return {
+      type: 'none',
+      x: 0.5,
+      y: 0.5,
+      radius: 0.05,
+      color: '#e74c3c',
+      strokeWidth: 3
+    };
+  }
+
+  function makeAnnotationId() {
+    return 'ann_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+  }
+
+  function getAnnotationById(id) {
+    return annotations.find(a => a.id === id);
+  }
+
+  function annotationVisibleAt(ann, t) {
+    return t >= (ann.startTime ?? 0) && t <= (ann.endTime ?? 0);
+  }
+
+  // In editor mode, show annotations whose [start, end] overlaps [t - W, t + W].
+  // Selected annotation always stays visible so the user can finish editing it
+  // even if they scrub outside its window.
+  function annotationVisibleInEditor(ann, t) {
+    if (ann.id === selectedAnnotationId) return true;
+    const w = Math.max(0, Number(annotationEditWindow) || 0);
+    const s = ann.startTime ?? 0;
+    const e = ann.endTime ?? 0;
+    return e >= t - w && s <= t + w;
+  }
+
+  function hexToRgbaCss(hex, opacity) {
+    if (!hex) return 'rgba(0, 0, 0, 0.8)';
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${(opacity ?? 80) / 100})`;
+  }
+
+  function renderAnnotations() {
+    if (!annotationOverlay) return;
+
+    // Determine which annotations should currently render
+    const t = videoElement ? videoElement.currentTime : 0;
+    const visibleSet = new Set(
+      annotations
+        .filter(a => annotationEditorActive
+          ? annotationVisibleInEditor(a, t)
+          : annotationVisibleAt(a, t))
+        .map(a => a.id)
+    );
+
+    // Remove boxes for annotations no longer visible
+    const existingBoxes = annotationOverlay.querySelectorAll('.custom-cuts-annotation-box');
+    existingBoxes.forEach(el => {
+      if (!visibleSet.has(el.dataset.annId)) el.remove();
+    });
+
+    // Render/update boxes
+    for (const ann of annotations) {
+      if (!visibleSet.has(ann.id)) continue;
+      let el = annotationOverlay.querySelector(`.custom-cuts-annotation-box[data-ann-id="${ann.id}"]`);
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'custom-cuts-annotation-box';
+        el.dataset.annId = ann.id;
+        annotationOverlay.appendChild(el);
+        attachAnnotationBoxHandlers(el);
+      }
+      applyAnnotationBoxStyle(el, ann);
+    }
+
+    renderAnnotationShapes();
+    updateAnnotationEditorChrome();
+  }
+
+  function applyAnnotationBoxStyle(el, ann) {
+    const style = ann.style || defaultAnnotationStyle();
+    el.style.left = (ann.box.x * 100) + '%';
+    el.style.top = (ann.box.y * 100) + '%';
+    el.style.width = (ann.box.w * 100) + '%';
+    el.style.height = (ann.box.h * 100) + '%';
+    el.style.color = style.textColor || '#ffffff';
+    el.style.backgroundColor = hexToRgbaCss(style.bgColor || '#000000', style.bgOpacity ?? 80);
+    el.style.borderColor = ann.id === selectedAnnotationId ? '#3498db' : (style.borderColor || 'rgba(255,255,255,0.4)');
+
+    // Text holder (separate element so we can rewrite text without nuking handles)
+    let textHolder = el.querySelector('.cc-ann-text');
+    if (!textHolder) {
+      textHolder = document.createElement('div');
+      textHolder.className = 'cc-ann-text';
+      textHolder.style.width = '100%';
+      textHolder.style.height = '100%';
+      textHolder.style.outline = 'none';
+      el.insertBefore(textHolder, el.firstChild);
+    }
+    textHolder.style.fontSize = (style.fontSize || 16) + 'px';
+    if (textHolder.getAttribute('contenteditable') !== 'true') {
+      textHolder.textContent = ann.text || '';
+    }
+
+    el.classList.toggle('selected', annotationEditorActive && ann.id === selectedAnnotationId);
+
+    // Editor-only adornments
+    const existingResize = el.querySelector('.custom-cuts-annotation-resize-handle');
+    const existingDelete = el.querySelector('.custom-cuts-annotation-delete-handle');
+    if (annotationEditorActive && ann.id === selectedAnnotationId) {
+      if (!existingResize) {
+        const rh = document.createElement('div');
+        rh.className = 'custom-cuts-annotation-resize-handle';
+        rh.dataset.handle = 'resize';
+        el.appendChild(rh);
+      }
+      if (!existingDelete) {
+        const dh = document.createElement('div');
+        dh.className = 'custom-cuts-annotation-delete-handle';
+        dh.dataset.handle = 'delete';
+        dh.textContent = '×';
+        el.appendChild(dh);
+      }
+    } else {
+      if (existingResize) existingResize.remove();
+      if (existingDelete) existingDelete.remove();
+    }
+  }
+
+  function renderAnnotationShapes() {
+    if (!annotationSvg) return;
+
+    // Remove existing shape elements (everything except <defs>)
+    const toRemove = [];
+    for (const child of annotationSvg.children) {
+      if (child.tagName !== 'defs') toRemove.push(child);
+    }
+    toRemove.forEach(c => c.remove());
+
+    // Remove existing shape handles
+    annotationOverlay.querySelectorAll('.custom-cuts-annotation-shape-handle').forEach(h => h.remove());
+
+    const t = videoElement ? videoElement.currentTime : 0;
+    const overlayRect = annotationOverlay.getBoundingClientRect();
+
+    for (const ann of annotations) {
+      const visible = annotationEditorActive
+        ? annotationVisibleInEditor(ann, t)
+        : annotationVisibleAt(ann, t);
+      if (!visible) continue;
+
+      const shape = ann.shape;
+      if (!shape || shape.type === 'none') continue;
+
+      const sx = shape.x * overlayRect.width;
+      const sy = shape.y * overlayRect.height;
+      const color = shape.color || '#e74c3c';
+      const sw = shape.strokeWidth || 3;
+
+      if (shape.type === 'dot') {
+        const c = document.createElementNS(ANNOTATION_SVG_NS, 'circle');
+        c.setAttribute('cx', sx);
+        c.setAttribute('cy', sy);
+        c.setAttribute('r', 6);
+        c.setAttribute('fill', color);
+        c.setAttribute('stroke', 'white');
+        c.setAttribute('stroke-width', '2');
+        annotationSvg.appendChild(c);
+      } else if (shape.type === 'circle') {
+        const r = (shape.radius || 0.05) * Math.min(overlayRect.width, overlayRect.height);
+        const c = document.createElementNS(ANNOTATION_SVG_NS, 'circle');
+        c.setAttribute('cx', sx);
+        c.setAttribute('cy', sy);
+        c.setAttribute('r', r);
+        c.setAttribute('fill', 'none');
+        c.setAttribute('stroke', color);
+        c.setAttribute('stroke-width', sw);
+        annotationSvg.appendChild(c);
+      } else if (shape.type === 'arrow') {
+        // Arrow from nearest edge of the box to (sx, sy)
+        const bx1 = ann.box.x * overlayRect.width;
+        const by1 = ann.box.y * overlayRect.height;
+        const bx2 = bx1 + ann.box.w * overlayRect.width;
+        const by2 = by1 + ann.box.h * overlayRect.height;
+        const cx = (bx1 + bx2) / 2;
+        const cy = (by1 + by2) / 2;
+        // Project from box center toward target, exit at box bounds
+        const dx = sx - cx;
+        const dy = sy - cy;
+        let tEnter = 1;
+        if (dx !== 0) tEnter = Math.min(tEnter, Math.abs((dx > 0 ? bx2 - cx : cx - bx1) / dx));
+        if (dy !== 0) tEnter = Math.min(tEnter, Math.abs((dy > 0 ? by2 - cy : cy - by1) / dy));
+        const startX = cx + dx * tEnter;
+        const startY = cy + dy * tEnter;
+        const line = document.createElementNS(ANNOTATION_SVG_NS, 'line');
+        line.setAttribute('x1', startX);
+        line.setAttribute('y1', startY);
+        line.setAttribute('x2', sx);
+        line.setAttribute('y2', sy);
+        line.setAttribute('stroke', color);
+        line.setAttribute('stroke-width', sw);
+        line.setAttribute('stroke-linecap', 'round');
+        line.setAttribute('marker-end', 'url(#cc-arrowhead)');
+        annotationSvg.appendChild(line);
+      }
+
+      // Editor-only shape handle (drag to reposition)
+      if (annotationEditorActive && ann.id === selectedAnnotationId) {
+        const h = document.createElement('div');
+        h.className = 'custom-cuts-annotation-shape-handle';
+        h.dataset.annId = ann.id;
+        h.dataset.handle = 'shape';
+        h.style.left = (shape.x * 100) + '%';
+        h.style.top = (shape.y * 100) + '%';
+        annotationOverlay.appendChild(h);
+        attachAnnotationShapeHandleHandlers(h);
+      }
+    }
+  }
+
+  function attachAnnotationBoxHandlers(el) {
+    el.addEventListener('mousedown', onAnnotationBoxMouseDown);
+    el.addEventListener('click', onAnnotationBoxClick);
+    el.addEventListener('dblclick', onAnnotationBoxDblClick);
+  }
+
+  function attachAnnotationShapeHandleHandlers(h) {
+    h.addEventListener('mousedown', onAnnotationShapeHandleMouseDown);
+  }
+
+  function onAnnotationBoxMouseDown(e) {
+    if (!annotationEditorActive) return;
+    const annId = e.currentTarget.dataset.annId;
+    const ann = getAnnotationById(annId);
+    if (!ann) return;
+    const handle = e.target.dataset.handle;
+
+    if (handle === 'delete') {
+      e.stopPropagation();
+      e.preventDefault();
+      deleteAnnotation(annId);
+      return;
+    }
+
+    // If text holder is in inline-edit mode, let the click pass through
+    const textHolder = e.currentTarget.querySelector('.cc-ann-text');
+    if (textHolder && textHolder.getAttribute('contenteditable') === 'true' && handle !== 'resize') {
+      return;
+    }
+
+    e.stopPropagation();
+    e.preventDefault();
+    selectAnnotation(annId);
+
+    annotationDrag = {
+      id: annId,
+      kind: handle === 'resize' ? 'resize' : 'move',
+      startX: e.clientX,
+      startY: e.clientY,
+      orig: { ...ann.box }
+    };
+    document.addEventListener('mousemove', onAnnotationDragMove);
+    document.addEventListener('mouseup', onAnnotationDragEnd, { once: true });
+  }
+
+  function onAnnotationShapeHandleMouseDown(e) {
+    if (!annotationEditorActive) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const annId = e.currentTarget.dataset.annId;
+    const ann = getAnnotationById(annId);
+    if (!ann) return;
+    selectAnnotation(annId);
+    annotationDrag = {
+      id: annId,
+      kind: 'shape',
+      startX: e.clientX,
+      startY: e.clientY,
+      orig: { x: ann.shape.x, y: ann.shape.y }
+    };
+    document.addEventListener('mousemove', onAnnotationDragMove);
+    document.addEventListener('mouseup', onAnnotationDragEnd, { once: true });
+  }
+
+  function onAnnotationBoxClick(e) {
+    if (!annotationEditorActive) return;
+    e.stopPropagation();
+    selectAnnotation(e.currentTarget.dataset.annId);
+  }
+
+  function onAnnotationBoxDblClick(e) {
+    if (!annotationEditorActive) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const el = e.currentTarget;
+    const annId = el.dataset.annId;
+    selectAnnotation(annId);
+    const textHolder = el.querySelector('.cc-ann-text');
+    if (!textHolder) return;
+    textHolder.setAttribute('contenteditable', 'true');
+    textHolder.focus();
+    // Place caret at end
+    const range = document.createRange();
+    range.selectNodeContents(textHolder);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    textHolder.addEventListener('blur', () => finishInlineEdit(textHolder, annId), { once: true });
+  }
+
+  async function finishInlineEdit(textHolder, annId) {
+    textHolder.removeAttribute('contenteditable');
+    const ann = getAnnotationById(annId);
+    if (!ann) return;
+    ann.text = textHolder.textContent || '';
+    await saveAnnotations();
+    updatePropsPanel();
+  }
+
+  function onAnnotationDragMove(e) {
+    if (!annotationDrag) return;
+    const ann = getAnnotationById(annotationDrag.id);
+    if (!ann || !annotationOverlay) return;
+    const rect = annotationOverlay.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const dxNorm = (e.clientX - annotationDrag.startX) / rect.width;
+    const dyNorm = (e.clientY - annotationDrag.startY) / rect.height;
+
+    if (annotationDrag.kind === 'move') {
+      ann.box.x = Math.max(0, Math.min(1 - ann.box.w, annotationDrag.orig.x + dxNorm));
+      ann.box.y = Math.max(0, Math.min(1 - ann.box.h, annotationDrag.orig.y + dyNorm));
+    } else if (annotationDrag.kind === 'resize') {
+      ann.box.w = Math.max(0.04, Math.min(1 - ann.box.x, annotationDrag.orig.w + dxNorm));
+      ann.box.h = Math.max(0.03, Math.min(1 - ann.box.y, annotationDrag.orig.h + dyNorm));
+    } else if (annotationDrag.kind === 'shape') {
+      ann.shape.x = Math.max(0, Math.min(1, annotationDrag.orig.x + dxNorm));
+      ann.shape.y = Math.max(0, Math.min(1, annotationDrag.orig.y + dyNorm));
+    }
+    renderAnnotations();
+  }
+
+  async function onAnnotationDragEnd() {
+    document.removeEventListener('mousemove', onAnnotationDragMove);
+    if (annotationDrag) {
+      annotationDrag = null;
+      await saveAnnotations();
+    }
+  }
+
+  function selectAnnotation(id) {
+    if (selectedAnnotationId === id) return;
+    selectedAnnotationId = id;
+    renderAnnotations();
+    updatePropsPanel();
+  }
+
+  function deselectAnnotation() {
+    if (selectedAnnotationId === null) return;
+    selectedAnnotationId = null;
+    renderAnnotations();
+    updatePropsPanel();
+  }
+
+  async function deleteAnnotation(id) {
+    annotations = annotations.filter(a => a.id !== id);
+    if (selectedAnnotationId === id) selectedAnnotationId = null;
+    await saveAnnotations();
+    renderAnnotations();
+    updatePropsPanel();
+  }
+
+  function addAnnotationAtCurrentTime() {
+    const t = videoElement ? videoElement.currentTime : 0;
+    const dur = videoElement ? (videoElement.duration || t + 5) : t + 5;
+    const ann = {
+      id: makeAnnotationId(),
+      startTime: t,
+      endTime: Math.min(dur, t + 5),
+      text: 'New comment',
+      box: { x: 0.35, y: 0.4, w: 0.3, h: 0.12 },
+      style: defaultAnnotationStyle(),
+      shape: defaultAnnotationShape(),
+      createdAt: Date.now()
+    };
+    annotations.push(ann);
+    selectedAnnotationId = ann.id;
+    saveAnnotations();
+    renderAnnotations();
+    updatePropsPanel();
+  }
+
+  // ----- Editor mode chrome (toolbar + properties panel) -----
+
+  function enterAnnotationEditor() {
+    if (annotationEditorActive) return;
+    annotationEditorActive = true;
+    // Pause video while editing so timestamps don't drift
+    if (videoElement) {
+      annotationWasPlaying = !videoElement.paused;
+      try { videoElement.pause(); } catch (_) {}
+    }
+    annotationOverlay.classList.add('editor-active');
+
+    if (!annotationToolbar) {
+      annotationToolbar = document.createElement('div');
+      annotationToolbar.className = 'custom-cuts-annotation-toolbar';
+      annotationToolbar.innerHTML = `
+        <button class="toolbar-add">+ Add Comment</button>
+        <span class="toolbar-hint">Drag to move · corner to resize · double-click to edit text</span>
+        <label class="toolbar-window">Show ±<input type="number" class="toolbar-window-input" min="0" max="36000" step="1" value="${annotationEditWindow}">s</label>
+        <button class="toolbar-done">Done</button>
+      `;
+      annotationToolbar.querySelector('.toolbar-add').addEventListener('click', () => {
+        addAnnotationAtCurrentTime();
+      });
+      annotationToolbar.querySelector('.toolbar-done').addEventListener('click', () => {
+        exitAnnotationEditor();
+      });
+      const windowInput = annotationToolbar.querySelector('.toolbar-window-input');
+      windowInput.addEventListener('input', async () => {
+        await saveAnnotationEditWindow(windowInput.value);
+        renderAnnotations();
+      });
+    } else {
+      // Toolbar persists across enter/exit cycles — refresh the input value
+      // in case the preference was changed elsewhere.
+      const windowInput = annotationToolbar.querySelector('.toolbar-window-input');
+      if (windowInput) windowInput.value = String(annotationEditWindow);
+    }
+    annotationOverlay.appendChild(annotationToolbar);
+
+    // Click overlay (background) to deselect
+    annotationOverlay.addEventListener('mousedown', onOverlayBackgroundClick);
+
+    renderAnnotations();
+    updatePropsPanel();
+  }
+
+  function onOverlayBackgroundClick(e) {
+    if (e.target === annotationOverlay || e.target === annotationSvg) {
+      deselectAnnotation();
+    }
+  }
+
+  async function exitAnnotationEditor() {
+    if (!annotationEditorActive) return;
+    annotationEditorActive = false;
+    selectedAnnotationId = null;
+    annotationOverlay.classList.remove('editor-active');
+    annotationOverlay.removeEventListener('mousedown', onOverlayBackgroundClick);
+    if (annotationToolbar && annotationToolbar.parentNode) {
+      annotationToolbar.parentNode.removeChild(annotationToolbar);
+    }
+    if (annotationPropsPanel && annotationPropsPanel.parentNode) {
+      annotationPropsPanel.parentNode.removeChild(annotationPropsPanel);
+      annotationPropsPanel = null;
+    }
+    await saveAnnotations();
+    renderAnnotations();
+    if (videoElement && annotationWasPlaying) {
+      try { await videoElement.play(); } catch (_) {}
+    }
+  }
+
+  function updateAnnotationEditorChrome() {
+    if (annotationEditorActive && annotationToolbar && !annotationToolbar.parentNode) {
+      annotationOverlay.appendChild(annotationToolbar);
+    }
+  }
+
+  function formatTimeMS(seconds) {
+    if (!isFinite(seconds)) seconds = 0;
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  }
+
+  function parseTimeMS(s) {
+    if (!s) return null;
+    const m = s.match(/^(\d+):([0-5]?\d)$/);
+    if (!m) return null;
+    return parseInt(m[1]) * 60 + parseInt(m[2]);
+  }
+
+  function updatePropsPanel() {
+    if (!annotationEditorActive) {
+      if (annotationPropsPanel && annotationPropsPanel.parentNode) {
+        annotationPropsPanel.parentNode.removeChild(annotationPropsPanel);
+        annotationPropsPanel = null;
+      }
+      return;
+    }
+    const ann = selectedAnnotationId ? getAnnotationById(selectedAnnotationId) : null;
+    if (!ann) {
+      if (annotationPropsPanel && annotationPropsPanel.parentNode) {
+        annotationPropsPanel.parentNode.removeChild(annotationPropsPanel);
+        annotationPropsPanel = null;
+      }
+      return;
+    }
+    if (!annotationPropsPanel) {
+      annotationPropsPanel = document.createElement('div');
+      annotationPropsPanel.className = 'custom-cuts-annotation-props';
+      document.body.appendChild(annotationPropsPanel);
+    }
+    const style = ann.style || defaultAnnotationStyle();
+    const shape = ann.shape || defaultAnnotationShape();
+
+    annotationPropsPanel.innerHTML = `
+      <label>Text</label>
+      <textarea data-field="text">${escapeAttr(ann.text || '')}</textarea>
+
+      <label>Time</label>
+      <div class="row">
+        <input type="text" class="time" data-field="startTime" value="${formatTimeMS(ann.startTime)}">
+        <button class="btn-now" data-now="start">Now</button>
+        <span>to</span>
+        <input type="text" class="time" data-field="endTime" value="${formatTimeMS(ann.endTime)}">
+        <button class="btn-now" data-now="end">Now</button>
+      </div>
+
+      <label>Style</label>
+      <div class="row">
+        <span>Size</span>
+        <input type="number" class="font-size" data-field="fontSize" min="8" max="80" value="${style.fontSize || 16}">
+        <span>Text</span>
+        <input type="color" data-field="textColor" value="${style.textColor || '#ffffff'}">
+        <span>BG</span>
+        <input type="color" data-field="bgColor" value="${style.bgColor || '#000000'}">
+        <input type="number" class="opacity-input" data-field="bgOpacity" min="0" max="100" value="${style.bgOpacity ?? 80}" title="Background opacity %">
+      </div>
+
+      <label>Shape</label>
+      <div class="row">
+        <select data-field="shapeType">
+          <option value="none" ${shape.type === 'none' ? 'selected' : ''}>None</option>
+          <option value="dot" ${shape.type === 'dot' ? 'selected' : ''}>Dot</option>
+          <option value="circle" ${shape.type === 'circle' ? 'selected' : ''}>Circle</option>
+          <option value="arrow" ${shape.type === 'arrow' ? 'selected' : ''}>Arrow</option>
+        </select>
+        <span>Color</span>
+        <input type="color" data-field="shapeColor" value="${shape.color || '#e74c3c'}">
+        <span>Width</span>
+        <input type="number" class="font-size" data-field="strokeWidth" min="1" max="20" value="${shape.strokeWidth || 3}">
+        <button class="btn-delete" data-action="delete">Delete</button>
+      </div>
+    `;
+
+    // Wire up handlers
+    annotationPropsPanel.querySelectorAll('[data-field]').forEach(input => {
+      const handler = async (e) => {
+        const field = input.dataset.field;
+        const val = input.value;
+        const a = getAnnotationById(selectedAnnotationId);
+        if (!a) return;
+        if (field === 'text') {
+          a.text = val;
+        } else if (field === 'startTime') {
+          const p = parseTimeMS(val);
+          if (p !== null) a.startTime = p;
+        } else if (field === 'endTime') {
+          const p = parseTimeMS(val);
+          if (p !== null) a.endTime = p;
+        } else if (field === 'fontSize') {
+          a.style = { ...(a.style || defaultAnnotationStyle()), fontSize: parseInt(val) || 16 };
+        } else if (field === 'textColor') {
+          a.style = { ...(a.style || defaultAnnotationStyle()), textColor: val };
+        } else if (field === 'bgColor') {
+          a.style = { ...(a.style || defaultAnnotationStyle()), bgColor: val };
+        } else if (field === 'bgOpacity') {
+          a.style = { ...(a.style || defaultAnnotationStyle()), bgOpacity: Math.max(0, Math.min(100, parseInt(val) || 0)) };
+        } else if (field === 'shapeType') {
+          a.shape = { ...(a.shape || defaultAnnotationShape()), type: val };
+        } else if (field === 'shapeColor') {
+          a.shape = { ...(a.shape || defaultAnnotationShape()), color: val };
+        } else if (field === 'strokeWidth') {
+          a.shape = { ...(a.shape || defaultAnnotationShape()), strokeWidth: parseInt(val) || 3 };
+        }
+        await saveAnnotations();
+        renderAnnotations();
+      };
+      input.addEventListener('input', handler);
+      input.addEventListener('change', handler);
+    });
+
+    annotationPropsPanel.querySelectorAll('[data-now]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const which = btn.dataset.now;
+        const a = getAnnotationById(selectedAnnotationId);
+        if (!a || !videoElement) return;
+        if (which === 'start') a.startTime = videoElement.currentTime;
+        else a.endTime = videoElement.currentTime;
+        await saveAnnotations();
+        updatePropsPanel();
+        renderAnnotations();
+      });
+    });
+
+    const delBtn = annotationPropsPanel.querySelector('[data-action="delete"]');
+    if (delBtn) {
+      delBtn.addEventListener('click', async () => {
+        if (selectedAnnotationId) await deleteAnnotation(selectedAnnotationId);
+      });
+    }
+  }
+
+  function escapeAttr(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[c]);
+  }
+
+  // ============================================================================
   // Volume Tag Functions
   // ============================================================================
 
@@ -1189,6 +1945,9 @@
 
     // Update pop tags
     updatePopTagDisplay();
+
+    // Update annotations
+    renderAnnotations();
 
     // Update volume from tags
     updateVolumeFromTags(currentTime);
@@ -1478,6 +2237,25 @@
           updatePopTagDisplay();
           // Also reload video settings to get updated volume tags
           loadVideoSettings();
+          sendResponse({ success: true });
+        });
+        return true;
+
+      case 'enterAnnotationEditor':
+        Promise.all([loadAnnotations(), loadAnnotationEditWindow()]).then(() => {
+          enterAnnotationEditor();
+          sendResponse({ success: true });
+        });
+        return true;
+
+      case 'exitAnnotationEditor':
+        exitAnnotationEditor().then(() => {
+          sendResponse({ success: true });
+        });
+        return true;
+
+      case 'reloadAnnotations':
+        loadAnnotations().then(() => {
           sendResponse({ success: true });
         });
         return true;

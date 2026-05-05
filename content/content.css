@@ -183,3 +183,304 @@
   z-index: 999998;
   pointer-events: none;
 }
+
+/* ============================================================================ */
+/* Annotation overlay - timestamped HUD-style comments on video                  */
+/* ============================================================================ */
+
+.custom-cuts-annotation-overlay {
+  position: fixed;
+  pointer-events: none;
+  z-index: 999997;
+  overflow: visible;
+}
+
+.custom-cuts-annotation-overlay.editor-active {
+  pointer-events: auto;
+  background: rgba(52, 152, 219, 0.04);
+  outline: 2px dashed rgba(52, 152, 219, 0.6);
+  outline-offset: -2px;
+}
+
+.custom-cuts-annotation-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.custom-cuts-annotation-overlay.editor-active .custom-cuts-annotation-svg {
+  pointer-events: auto;
+}
+
+.custom-cuts-annotation-box {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 16px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow: hidden;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.custom-cuts-annotation-overlay.editor-active .custom-cuts-annotation-box {
+  pointer-events: auto;
+  cursor: move;
+  border-color: rgba(255, 255, 255, 0.4);
+  border-style: dashed;
+}
+
+.custom-cuts-annotation-box.selected {
+  border-color: #3498db !important;
+  border-style: solid !important;
+  box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.3), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.custom-cuts-annotation-box[contenteditable="true"] {
+  cursor: text;
+  outline: none;
+}
+
+.custom-cuts-annotation-resize-handle {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  width: 14px;
+  height: 14px;
+  background: #3498db;
+  border: 2px solid white;
+  border-radius: 50%;
+  cursor: nwse-resize;
+  pointer-events: auto;
+}
+
+.custom-cuts-annotation-delete-handle {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  width: 20px;
+  height: 20px;
+  background: #e74c3c;
+  border: 2px solid white;
+  border-radius: 50%;
+  color: white;
+  font-size: 14px;
+  font-weight: bold;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  pointer-events: auto;
+  user-select: none;
+}
+
+.custom-cuts-annotation-shape-handle {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  background: #f39c12;
+  border: 2px solid white;
+  border-radius: 50%;
+  cursor: move;
+  pointer-events: auto;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+}
+
+/* Editor toolbar (top of overlay) */
+.custom-cuts-annotation-toolbar {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  background: rgba(44, 62, 80, 0.95);
+  padding: 8px 12px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  pointer-events: auto;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  color: white;
+  z-index: 5;
+}
+
+.custom-cuts-annotation-toolbar button {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.custom-cuts-annotation-toolbar .toolbar-add {
+  background: #27ae60;
+  color: white;
+}
+
+.custom-cuts-annotation-toolbar .toolbar-add:hover {
+  background: #229954;
+}
+
+.custom-cuts-annotation-toolbar .toolbar-done {
+  background: #ecf0f1;
+  color: #2c3e50;
+}
+
+.custom-cuts-annotation-toolbar .toolbar-done:hover {
+  background: #bdc3c7;
+}
+
+.custom-cuts-annotation-toolbar .toolbar-hint {
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  opacity: 0.85;
+  padding: 0 6px;
+}
+
+.custom-cuts-annotation-toolbar .toolbar-window {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: white;
+  padding: 0 4px;
+}
+
+.custom-cuts-annotation-toolbar .toolbar-window-input {
+  width: 48px;
+  padding: 3px 4px;
+  border: 1px solid #7f8c8d;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.95);
+  color: #2c3e50;
+  font-size: 11px;
+  font-family: inherit;
+  text-align: center;
+}
+
+/* Properties panel (bottom of viewport) */
+.custom-cuts-annotation-props {
+  position: fixed;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  background: rgba(44, 62, 80, 0.97);
+  color: white;
+  padding: 10px 14px;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 12px;
+  z-index: 999999;
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 6px 12px;
+  align-items: center;
+  pointer-events: auto;
+  max-width: 90vw;
+}
+
+.custom-cuts-annotation-props label {
+  font-weight: 600;
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.custom-cuts-annotation-props .row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.custom-cuts-annotation-props input[type="text"],
+.custom-cuts-annotation-props textarea,
+.custom-cuts-annotation-props select {
+  background: rgba(255, 255, 255, 0.95);
+  color: #2c3e50;
+  border: 1px solid #bdc3c7;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.custom-cuts-annotation-props textarea {
+  resize: vertical;
+  min-height: 36px;
+  width: 260px;
+}
+
+.custom-cuts-annotation-props input[type="text"].time {
+  width: 56px;
+  font-family: monospace;
+  text-align: center;
+}
+
+.custom-cuts-annotation-props input[type="number"].font-size {
+  width: 56px;
+  background: rgba(255, 255, 255, 0.95);
+  color: #2c3e50;
+  border: 1px solid #bdc3c7;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.custom-cuts-annotation-props input[type="color"] {
+  width: 28px;
+  height: 24px;
+  border: 1px solid #bdc3c7;
+  border-radius: 3px;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.custom-cuts-annotation-props button {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.custom-cuts-annotation-props .btn-now {
+  background: #3498db;
+  color: white;
+}
+
+.custom-cuts-annotation-props .btn-now:hover {
+  background: #2980b9;
+}
+
+.custom-cuts-annotation-props .btn-delete {
+  background: #e74c3c;
+  color: white;
+}
+
+.custom-cuts-annotation-props .btn-delete:hover {
+  background: #c0392b;
+}
+
+.custom-cuts-annotation-props .opacity-input {
+  width: 50px;
+}

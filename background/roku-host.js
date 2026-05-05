@@ -227,6 +227,11 @@ export async function buildQueuePayload() {
       ratings: vd.ratings || {},
     };
     if (vd.localPath) entry.localPath = vd.localPath;
+    // Forward annotations (HUD-style timestamped comments) so Kodi/Roku
+    // can render them at the right times during playback.
+    if (Array.isArray(vd.annotations) && vd.annotations.length > 0) {
+      entry.annotations = vd.annotations;
+    }
     out.push(entry);
   }
   return out;
