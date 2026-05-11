@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Custom Cuts",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "Video overlay extension providing accessibility features: subtitles, tagging, time-range skipping, and hotkey controls",
   "permissions": [
     "storage",
