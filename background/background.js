@@ -46,7 +46,8 @@ const DEFAULT_SETTINGS = {
     soundType: 'chime',  // 'chime', 'ding', 'pop', 'bubble'
     position: 'bottom-center'  // 'bottom-center', 'bottom-left', 'bottom-right'
   },
-  obeyVolumeTags: true
+  obeyVolumeTags: true,
+  autoSkipIntro: false
 };
 
 // Native messaging host name

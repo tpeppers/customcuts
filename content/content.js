@@ -106,6 +106,32 @@
   let originalVolume = null;  // Volume before tag was applied
   let startingVolume = null;  // Default starting volume from VOLUME tag without time range
 
+  // Auto skip intro/ad state
+  let autoSkipIntroEnabled = false;
+  let autoSkipObserver = null;
+  let autoSkipIntervalId = null;
+  // Sites obscure these buttons with rotating class names, so we mix specific
+  // selectors (faster) with a text-match fallback (resilient to renames).
+  const AUTO_SKIP_SELECTORS = [
+    // YouTube
+    '.ytp-ad-skip-button',
+    '.ytp-ad-skip-button-modern',
+    '.ytp-skip-ad-button',
+    '.ytp-ad-skip-button-container button',
+    // Netflix
+    '[data-uia="player-skip-intro"]',
+    '[data-uia="player-skip-recap"]',
+    '[data-uia="player-skip-preplay"]',
+    // Disney+ / Hulu
+    '[data-testid="skip-intro-button"]',
+    '[data-testid="skip-recap-button"]',
+    '.skip-button',
+  ];
+  const AUTO_SKIP_TEXT_RE = /^\s*skip\s+(intro|ad(?:vert(?:isement)?)?s?|recap|credits|opening|preview)\s*$/i;
+  // Tracks elements we already clicked this DOM lifetime so we don't fight a
+  // button that re-renders with the same node (or burn cycles re-clicking).
+  let autoSkipClicked = new WeakSet();
+
   // Sound Player using Web Audio API
   class SoundPlayer {
     constructor() {
@@ -1853,6 +1879,7 @@
       subtitleStyle = response.subtitleStyle || {};
       popTagStyle = response.popTagStyle || {};
       obeyVolumeTags = response.obeyVolumeTags !== false;
+      setAutoSkipIntroEnabled(response.autoSkipIntro === true);
 
       // Initialize sound player
       if (!soundPlayer) {
@@ -1864,6 +1891,107 @@
     } catch (error) {
       console.error('Failed to load display settings:', error);
     }
+  }
+
+  // ============================================================================
+  // Auto Skip Intro / Ad
+  // ============================================================================
+  //
+  // Watches the page for "Skip Intro" / "Skip Ad" buttons and clicks them
+  // automatically. Uses a MutationObserver (fires when the button is inserted)
+  // backed by a 2-second interval fallback for shadow DOM / late hydration
+  // cases the observer can miss.
+
+  function isAutoSkipCandidate(el) {
+    if (!(el instanceof Element)) return false;
+    if (autoSkipClicked.has(el)) return false;
+    // Skip our own UI (subtitle/notification overlays, manager iframe, etc.)
+    if (el.closest('[data-customcuts]')) return false;
+    return true;
+  }
+
+  function isElementVisible(el) {
+    // getBoundingClientRect is ~free and weeds out display:none / detached.
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const style = el.ownerDocument.defaultView?.getComputedStyle(el);
+    if (style && (style.visibility === 'hidden' || style.opacity === '0' || style.pointerEvents === 'none')) {
+      return false;
+    }
+    return true;
+  }
+
+  function tryClickAutoSkip(el) {
+    if (!isAutoSkipCandidate(el) || !isElementVisible(el)) return false;
+    autoSkipClicked.add(el);
+    try {
+      el.click();
+      console.log('[AutoSkip] clicked', el);
+      showNotification('Skipped');
+      return true;
+    } catch (e) {
+      console.warn('[AutoSkip] click failed', e);
+      return false;
+    }
+  }
+
+  function scanForSkipButtons(root) {
+    if (!autoSkipIntroEnabled) return;
+    const scope = root && root.querySelectorAll ? root : document;
+    // Specific selectors first — fast path for the sites we know.
+    for (const sel of AUTO_SKIP_SELECTORS) {
+      const matches = scope.querySelectorAll(sel);
+      for (const el of matches) {
+        if (tryClickAutoSkip(el)) return;
+      }
+    }
+    // Text fallback. Restricted to button-like elements to avoid scanning
+    // every <span> on a heavy page like youtube.com.
+    const candidates = scope.querySelectorAll('button, [role="button"], a.skip, .ytp-button');
+    for (const el of candidates) {
+      const text = (el.textContent || '').trim();
+      if (!text || text.length > 40) continue;
+      if (AUTO_SKIP_TEXT_RE.test(text)) {
+        if (tryClickAutoSkip(el)) return;
+      }
+    }
+  }
+
+  function startAutoSkipObserver() {
+    if (autoSkipObserver || !document.body) return;
+    autoSkipObserver = new MutationObserver((mutations) => {
+      if (!autoSkipIntroEnabled) return;
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            scanForSkipButtons(node);
+          }
+        }
+      }
+    });
+    autoSkipObserver.observe(document.body, { childList: true, subtree: true });
+    autoSkipIntervalId = setInterval(() => scanForSkipButtons(document), 2000);
+    // Initial sweep — the button may already be on screen when we turn on.
+    scanForSkipButtons(document);
+  }
+
+  function stopAutoSkipObserver() {
+    if (autoSkipObserver) {
+      autoSkipObserver.disconnect();
+      autoSkipObserver = null;
+    }
+    if (autoSkipIntervalId !== null) {
+      clearInterval(autoSkipIntervalId);
+      autoSkipIntervalId = null;
+    }
+    autoSkipClicked = new WeakSet();
+  }
+
+  function setAutoSkipIntroEnabled(enabled) {
+    if (autoSkipIntroEnabled === enabled) return;
+    autoSkipIntroEnabled = enabled;
+    if (enabled) startAutoSkipObserver();
+    else stopAutoSkipObserver();
   }
 
   function getFontFamily(value) {
@@ -2273,6 +2401,11 @@
           originalVolume = null;
           activeVolumeTag = null;
         }
+        sendResponse({ success: true });
+        break;
+
+      case 'setAutoSkipIntro':
+        setAutoSkipIntroEnabled(message.enabled === true);
         sendResponse({ success: true });
         break;
 

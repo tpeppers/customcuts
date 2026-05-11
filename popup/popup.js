@@ -41,6 +41,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const patternTypeSelect = document.getElementById('pattern-type-select');
   const learnPatternBtn = document.getElementById('learn-pattern-btn');
   const learnPatternStatus = document.getElementById('learn-pattern-status');
+  const autoSkipIntroToggle = document.getElementById('auto-skip-intro-toggle');
 
   // Pattern state (session-level, not persisted per-video)
   let allPatterns = [];
@@ -459,12 +460,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
 
-    // Load obeyVolumeTags from global settings
+    // Load obeyVolumeTags + autoSkipIntro from global settings
     try {
       const settings = await chrome.runtime.sendMessage({ action: 'getSettings' });
       obeyVolumeTagsToggle.checked = settings.obeyVolumeTags !== false;
+      autoSkipIntroToggle.checked = settings.autoSkipIntro === true;
     } catch (e) {
       obeyVolumeTagsToggle.checked = true; // Default to on
+      autoSkipIntroToggle.checked = false; // Default to off (opt-in)
     }
   }
 
@@ -1368,6 +1371,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.tabs.sendMessage(currentTab.id, {
       action: 'setObeyVolumeTags',
       enabled: obeyVolumeTagsToggle.checked
+    });
+  });
+
+  autoSkipIntroToggle.addEventListener('change', async () => {
+    const settings = await chrome.runtime.sendMessage({ action: 'getSettings' });
+    settings.autoSkipIntro = autoSkipIntroToggle.checked;
+    await chrome.runtime.sendMessage({ action: 'saveSettings', settings });
+    chrome.tabs.sendMessage(currentTab.id, {
+      action: 'setAutoSkipIntro',
+      enabled: autoSkipIntroToggle.checked
     });
   });
 
