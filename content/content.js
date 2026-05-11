@@ -128,9 +128,14 @@
     '.skip-button',
   ];
   const AUTO_SKIP_TEXT_RE = /^\s*skip\s+(intro|ad(?:vert(?:isement)?)?s?|recap|credits|opening|preview)\s*$/i;
-  // Tracks elements we already clicked this DOM lifetime so we don't fight a
-  // button that re-renders with the same node (or burn cycles re-clicking).
-  let autoSkipClicked = new WeakSet();
+  // Cooldown: don't re-attempt the same element more often than every 1.5s.
+  // We used to permanently blacklist clicked elements, but that loses to
+  // YouTube's countdown — the button exists during the 5s unskippable phase
+  // but ignores clicks; if we click then and mark it forever, we never retry
+  // once it becomes skippable.
+  const AUTO_SKIP_COOLDOWN_MS = 1500;
+  let autoSkipLastAttempt = new WeakMap();
+  let autoSkipLastYouTubeSeek = 0;
 
   // Sound Player using Web Audio API
   class SoundPlayer {
@@ -1904,7 +1909,17 @@
 
   function isAutoSkipCandidate(el) {
     if (!(el instanceof Element)) return false;
-    if (autoSkipClicked.has(el)) return false;
+    // Cooldown — don't hammer the same node.
+    const last = autoSkipLastAttempt.get(el);
+    if (last && performance.now() - last < AUTO_SKIP_COOLDOWN_MS) return false;
+    // Disabled / pre-countdown state. YouTube only adds
+    // `ytp-ad-component--clickable` once the 5s timer expires; before that,
+    // clicks are no-ops and we'd burn our cooldown for nothing.
+    if (el.getAttribute('aria-disabled') === 'true' || el.disabled) return false;
+    if (el.classList.contains('ytp-skip-ad-button') &&
+        !el.classList.contains('ytp-ad-component--clickable')) {
+      return false;
+    }
     // Skip our own UI (subtitle/notification overlays, manager iframe, etc.)
     if (el.closest('[data-customcuts]')) return false;
     return true;
@@ -1921,12 +1936,39 @@
     return true;
   }
 
+  function dispatchRealisticClick(target) {
+    // YouTube (and other modern players) bind to pointerdown/pointerup,
+    // not `click`. el.click() only dispatches a synthetic click event, so it
+    // silently no-ops on those buttons. Fire a full pointer + mouse + click
+    // sequence so the real handler triggers.
+    const rect = target.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const base = {
+      bubbles: true, cancelable: true, composed: true, view: window,
+      clientX: cx, clientY: cy, button: 0, buttons: 1,
+    };
+    const pBase = { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true };
+    target.dispatchEvent(new PointerEvent('pointerover', pBase));
+    target.dispatchEvent(new PointerEvent('pointerenter', { ...pBase, bubbles: false }));
+    target.dispatchEvent(new PointerEvent('pointerdown', pBase));
+    target.dispatchEvent(new MouseEvent('mousedown', base));
+    target.dispatchEvent(new PointerEvent('pointerup', pBase));
+    target.dispatchEvent(new MouseEvent('mouseup', base));
+    target.dispatchEvent(new MouseEvent('click', base));
+  }
+
   function tryClickAutoSkip(el) {
     if (!isAutoSkipCandidate(el) || !isElementVisible(el)) return false;
-    autoSkipClicked.add(el);
+    // The text fallback may have matched a child <span> / <div>; walk up to
+    // the nearest real button so the click target is what YouTube expects.
+    const target = el.closest('button, [role="button"]') || el;
+    const now = performance.now();
+    autoSkipLastAttempt.set(el, now);
+    autoSkipLastAttempt.set(target, now);
     try {
-      el.click();
-      console.log('[AutoSkip] clicked', el);
+      dispatchRealisticClick(target);
+      console.log('[AutoSkip] clicked', target);
       showNotification('Skipped');
       return true;
     } catch (e) {
@@ -1935,8 +1977,35 @@
     }
   }
 
+  function trySkipYouTubeAd() {
+    // YouTube serves ads through the same <video> as main content. While an
+    // ad is playing, #movie_player carries .ad-showing. Seeking the video to
+    // its duration bypasses the Skip button entirely, so this works even
+    // during the unskippable countdown when the button is not yet clickable.
+    if (!/(^|\.)youtube\.com$/.test(location.hostname)) return false;
+    const player = document.querySelector('#movie_player.ad-showing, .html5-video-player.ad-showing');
+    if (!player) return false;
+    const video = player.querySelector('video');
+    if (!video || !Number.isFinite(video.duration) || video.duration <= 0) return false;
+    const now = performance.now();
+    if (now - autoSkipLastYouTubeSeek < AUTO_SKIP_COOLDOWN_MS) return false;
+    autoSkipLastYouTubeSeek = now;
+    try {
+      video.currentTime = video.duration;
+      console.log('[AutoSkip] YouTube ad: seeked video to end', video.duration);
+      showNotification('Skipped ad');
+      return true;
+    } catch (e) {
+      console.warn('[AutoSkip] YouTube seek failed', e);
+      return false;
+    }
+  }
+
   function scanForSkipButtons(root) {
     if (!autoSkipIntroEnabled) return;
+    // Site-specific fast path. Bypasses any button-clickability dance and
+    // works whether the Skip button has rendered yet or not.
+    if (trySkipYouTubeAd()) return;
     const scope = root && root.querySelectorAll ? root : document;
     // Specific selectors first — fast path for the sites we know.
     for (const sel of AUTO_SKIP_SELECTORS) {
@@ -1984,7 +2053,8 @@
       clearInterval(autoSkipIntervalId);
       autoSkipIntervalId = null;
     }
-    autoSkipClicked = new WeakSet();
+    autoSkipLastAttempt = new WeakMap();
+    autoSkipLastYouTubeSeek = 0;
   }
 
   function setAutoSkipIntroEnabled(enabled) {
