@@ -136,6 +136,19 @@ Mozilla's `web-ext` CLI.
    ```
    Keep these out of git — they grant full account access.
 
+### Testing a build locally (no signing needed)
+
+Release Firefox refuses to install unsigned extensions, but `web-ext run`
+launches a throwaway profile that accepts them:
+
+```bash
+python build_extension.py --target firefox --run
+```
+
+This stages `build/firefox/` and opens Firefox with the extension
+pre-loaded. Source changes auto-reload. The version is NOT bumped — this
+flow is for dev only. Close the launched Firefox to end the session.
+
 ### Publishing a new version
 
 ```bash

@@ -151,6 +151,26 @@ def build_dir(out_dir: Path, manifest_data: dict,
     print(f'staged {out_dir.relative_to(SCRIPT_DIR)}/  ({n} files, {label})')
 
 
+def run_firefox(source_dir: Path) -> int:
+    """Invoke `npx web-ext run` against a staged Firefox source directory.
+
+    Launches a throwaway Firefox profile with the extension pre-loaded so we
+    can iterate without signing or stuffing the unsigned XPI into release
+    Firefox (which refuses it).
+    """
+    npx = shutil.which('npx')
+    if not npx:
+        print('error: npx not found on PATH. Install Node.js and run '
+              '`npm install` from the repo root to pin web-ext.',
+              file=sys.stderr)
+        return 2
+
+    cmd = [npx, '--yes', 'web-ext', 'run', '--source-dir', str(source_dir)]
+    print('running: npx web-ext run ...')
+    result = subprocess.run(cmd, cwd=str(SCRIPT_DIR))
+    return result.returncode
+
+
 def sign_firefox(source_dir: Path, channel: str) -> int:
     """Invoke `npx web-ext sign` against a staged Firefox source directory.
 
@@ -230,10 +250,22 @@ def main() -> int:
     parser.add_argument('--channel', choices=['listed', 'unlisted'], default='unlisted',
                         help='web-ext sign channel: unlisted signs for self-distribution (default), '
                              'listed publishes to the public AMO catalog')
+    parser.add_argument('--run', action='store_true',
+                        help='after the Firefox build, launch a throwaway Firefox profile with '
+                             'the extension pre-loaded via `npx web-ext run`. Skips the version '
+                             'bump by default (no point bumping for local dev).')
     args = parser.parse_args()
 
     if args.sign and args.target == 'chrome':
         parser.error('--sign only applies to Firefox builds')
+    if args.run and args.target == 'chrome':
+        parser.error('--run only applies to Firefox builds')
+    if args.run and args.sign:
+        parser.error('--run and --sign are mutually exclusive')
+
+    # Local dev shouldn't bump the version — that's only for AMO uploads.
+    if args.run and not args.minor:
+        args.no_bump = True
 
     manifest_path = SCRIPT_DIR / 'manifest.json'
     with open(manifest_path) as f:
@@ -257,6 +289,11 @@ def main() -> int:
         if args.sign:
             build_dir(FIREFOX_BUILD_DIR, firefox_manifest, files, 'firefox')
             rc = sign_firefox(FIREFOX_BUILD_DIR, channel=args.channel)
+            if rc != 0:
+                return rc
+        if args.run:
+            build_dir(FIREFOX_BUILD_DIR, firefox_manifest, files, 'firefox')
+            rc = run_firefox(FIREFOX_BUILD_DIR)
             if rc != 0:
                 return rc
 
