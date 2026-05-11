@@ -17,6 +17,25 @@
 - Conda executable: `C:\Users\taimp\anaconda3\Scripts\conda.exe`
 - Run in conda env: `"C:/Users/taimp/anaconda3/Scripts/conda.exe" run -n customcuts <command>`
 
+## BrightScript / Roku channel (`customcuts-roku/`)
+- **Do not use `box` as an identifier in BrightScript** (`.brs` / `.xml`). It's a
+  reserved word in `brs-engine` (the BrightScript Simulator we test with under
+  `test_env/brs-desktop`), even though real Roku firmware accepts it. The
+  parser rejects it as a local variable name *and* as a dot-accessor field
+  name (`obj.box`). Real Roku tolerates it, so existing channels can compile
+  there but fail to load in the simulator.
+- If a JSON payload from the host uses `"box"` as a field, access it with
+  bracket notation (`ann["box"]`) and assign it to a non-reserved local like
+  `rect`. Do not rename the wire field — `native_host` and the manager UI
+  already speak `box`.
+- Same caution applies to other BrightScript reserved/keyword-ish names; when
+  in doubt, prefer descriptive locals (`rect`, `nodeRef`, `entry`) over
+  one-word names that could collide with intrinsics.
+- Test loop: `python customcuts-roku/build.py` writes `customcuts-roku.zip`,
+  then drag-drop into the BrightScript Simulator (`test_env/brs-desktop/`)
+  *before* sideloading to a real Roku — the simulator surfaces parser errors
+  the device silently masks.
+
 ---
 
 ## TODO: Re-evaluate NVIDIA Parakeet TDT (preferred architecture)

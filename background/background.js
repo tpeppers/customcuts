@@ -60,6 +60,17 @@ const generationState = new Map();
 
 // Offscreen document state
 let offscreenCreated = false;
+// Tab that hosts the iframe-based offscreen substitute (Firefox path).
+let offscreenIframeTabId = null;
+
+// Browser-feature detection. chrome.offscreen and chrome.tabCapture are
+// Chrome-only; on Firefox we substitute the offscreen document with a hidden
+// iframe injected by the content script. The streamId-based tab-audio capture
+// path has no Firefox equivalent, so live transcription is gated behind this
+// flag and surfaces a clear error rather than hanging.
+const OFFSCREEN_API_AVAILABLE = !!(globalThis.chrome && chrome.offscreen);
+const TAB_CAPTURE_SUPPORTED = !!(globalThis.chrome && chrome.tabCapture
+  && typeof chrome.tabCapture.getMediaStreamId === 'function');
 
 async function getSettings() {
   const data = await chrome.storage.sync.get('settings');
@@ -96,28 +107,41 @@ async function sendToTab(tabId, message) {
 // Offscreen Document Management
 // ============================================================================
 
-async function ensureOffscreenDocument() {
+async function ensureOffscreenDocument(hostTabId) {
   if (offscreenCreated) {
     return;
   }
 
-  // Check if offscreen document already exists
-  const existingContexts = await chrome.runtime.getContexts({
-    contextTypes: ['OFFSCREEN_DOCUMENT']
-  });
+  if (OFFSCREEN_API_AVAILABLE) {
+    // Chrome path: a real offscreen document.
+    const existingContexts = await chrome.runtime.getContexts({
+      contextTypes: ['OFFSCREEN_DOCUMENT']
+    });
 
-  if (existingContexts.length > 0) {
+    if (existingContexts.length > 0) {
+      offscreenCreated = true;
+      return;
+    }
+
+    await chrome.offscreen.createDocument({
+      url: 'offscreen/offscreen.html',
+      reasons: ['USER_MEDIA', 'AUDIO_PLAYBACK'],
+      justification: 'Audio capture and playback for speech-to-text transcription'
+    });
+
     offscreenCreated = true;
     return;
   }
 
-  // Create offscreen document
-  await chrome.offscreen.createDocument({
-    url: 'offscreen/offscreen.html',
-    reasons: ['USER_MEDIA', 'AUDIO_PLAYBACK'],
-    justification: 'Audio capture and playback for speech-to-text transcription'
-  });
-
+  // Firefox path: ask the host tab's content script to inject a hidden iframe
+  // pointing at offscreen/offscreen.html. The iframe runs in extension origin
+  // and so receives chrome.runtime.sendMessage broadcasts the same way the
+  // Chrome offscreen document does.
+  if (hostTabId == null) {
+    throw new Error('Offscreen iframe needs a host tab id');
+  }
+  await chrome.tabs.sendMessage(hostTabId, { action: 'ensureOffscreenIframe' });
+  offscreenIframeTabId = hostTabId;
   offscreenCreated = true;
 }
 
@@ -125,11 +149,19 @@ async function closeOffscreenDocument() {
   if (!offscreenCreated) return;
 
   try {
-    await chrome.offscreen.closeDocument();
-    offscreenCreated = false;
+    if (OFFSCREEN_API_AVAILABLE) {
+      await chrome.offscreen.closeDocument();
+    } else if (offscreenIframeTabId != null) {
+      try {
+        await chrome.tabs.sendMessage(offscreenIframeTabId,
+          { action: 'closeOffscreenIframe' });
+      } catch (_) { /* tab may already be closed */ }
+      offscreenIframeTabId = null;
+    }
   } catch (e) {
     // Ignore - document may already be closed
   }
+  offscreenCreated = false;
 }
 
 // ============================================================================
@@ -243,6 +275,11 @@ class TranscriptionSession {
 
   async startAudioCapture() {
     try {
+      if (!TAB_CAPTURE_SUPPORTED) {
+        throw new Error('Live transcription requires chrome.tabCapture, which '
+          + 'is not available in this browser yet (Firefox has no equivalent API).');
+      }
+
       // Get a media stream ID for the tab
       const streamId = await chrome.tabCapture.getMediaStreamId({
         targetTabId: this.tabId
@@ -254,7 +291,7 @@ class TranscriptionSession {
 
 
       // Ensure offscreen document exists
-      await ensureOffscreenDocument();
+      await ensureOffscreenDocument(this.tabId);
 
       // Start capture in offscreen document
       const response = await chrome.runtime.sendMessage({
@@ -563,6 +600,11 @@ class SubtitleGenerationSession {
 
   async startAudioCapture() {
     try {
+      if (!TAB_CAPTURE_SUPPORTED) {
+        throw new Error('Subtitle generation requires chrome.tabCapture, which '
+          + 'is not available in this browser yet (Firefox has no equivalent API).');
+      }
+
       const streamId = await chrome.tabCapture.getMediaStreamId({
         targetTabId: this.tabId
       });
@@ -571,7 +613,7 @@ class SubtitleGenerationSession {
         throw new Error('Failed to get media stream ID');
       }
 
-      await ensureOffscreenDocument();
+      await ensureOffscreenDocument(this.tabId);
 
       const response = await chrome.runtime.sendMessage({
         action: 'startGenerationCapture',

@@ -2115,8 +2115,36 @@
   // Message Handlers
   // ============================================================================
 
+  // Hidden iframe used as a Firefox substitute for chrome.offscreen. The
+  // background script asks us to inject it; the iframe loads
+  // offscreen/offscreen.html in extension origin and receives runtime
+  // messages directly.
+  let _offscreenIframe = null;
+
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.action) {
+      case 'ensureOffscreenIframe':
+        if (!_offscreenIframe) {
+          const frame = document.createElement('iframe');
+          frame.src = chrome.runtime.getURL('offscreen/offscreen.html');
+          frame.style.cssText = 'position:fixed;left:-9999px;top:-9999px;'
+            + 'width:1px;height:1px;border:0;visibility:hidden;';
+          frame.setAttribute('aria-hidden', 'true');
+          frame.setAttribute('allow', 'autoplay; microphone');
+          (document.body || document.documentElement).appendChild(frame);
+          _offscreenIframe = frame;
+        }
+        sendResponse({ success: true });
+        break;
+
+      case 'closeOffscreenIframe':
+        if (_offscreenIframe) {
+          _offscreenIframe.remove();
+          _offscreenIframe = null;
+        }
+        sendResponse({ success: true });
+        break;
+
       case 'getVideoInfo':
         const video = findVideo();
         sendResponse({

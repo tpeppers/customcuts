@@ -686,13 +686,16 @@ sub hideAllAnnotations()
 end sub
 
 sub applyAnnotationToSlot(s as object, ann as object)
-    box = ann.box
-    if box = invalid then box = { x: 0.35, y: 0.4, w: 0.3, h: 0.12 }
+    ' Field is named "box" in the JSON payload but `box` is a reserved word
+    ' in brs-engine (the BrightScript Simulator). Use bracket access for the
+    ' lookup and a non-reserved local name to keep the parser happy.
+    rect = ann["box"]
+    if rect = invalid then rect = { x: 0.35, y: 0.4, w: 0.3, h: 0.12 }
 
-    bx = clampF(box.x, 0, 1)
-    by = clampF(box.y, 0, 1)
-    bw = clampF(box.w, 0.04, 1)
-    bh = clampF(box.h, 0.03, 1)
+    bx = clampF(rect.x, 0, 1)
+    by = clampF(rect.y, 0, 1)
+    bw = clampF(rect.w, 0.04, 1)
+    bh = clampF(rect.h, 0.03, 1)
 
     px = Int(bx * 1920)
     py = Int(by * 1080)
@@ -723,13 +726,13 @@ sub applyAnnotationToSlot(s as object, ann as object)
     ' Roku 'font' field accepts a uri or built-in font ref. We approximate
     ' by picking a discrete built-in size based on annotation fontSize.
     if fontSize >= 28 then
-        s.lbl.font = "font:LargeBoldSystemFont"
+        s.lbl.font = "font:SmallBoldSystemFont"
     else if fontSize >= 20 then
-        s.lbl.font = "font:MediumBoldSystemFont"
+        s.lbl.font = "font:SmallestBoldSystemFont"
     else if fontSize >= 14 then
-        s.lbl.font = "font:MediumSystemFont"
+        s.lbl.font = "font:SmallestSystemFont"
     else
-        s.lbl.font = "font:SmallSystemFont"
+        s.lbl.font = "font:SmallestSystemFont"
     end if
     s.slot.visible = true
 end sub
