@@ -1,3 +1,28 @@
+// DOM construction helper. Avoids innerHTML (AMO addons-linter warns on it).
+// attrs: object of attributes; `class`, `dataset`, `text`, and `on*` are special.
+function _el(tag, attrs, ...children) {
+  const n = document.createElement(tag);
+  if (attrs) {
+    for (const k of Object.keys(attrs)) {
+      const v = attrs[k];
+      if (v == null || v === false) continue;
+      if (k === 'class') n.className = v;
+      else if (k === 'dataset') Object.assign(n.dataset, v);
+      else if (k.startsWith('on') && typeof v === 'function') n.addEventListener(k.slice(2), v);
+      else if (k === 'text') n.textContent = v;
+      else if (v === true) n.setAttribute(k, '');
+      else n.setAttribute(k, v);
+    }
+  }
+  const append = (c) => {
+    if (c == null || c === false) return;
+    if (Array.isArray(c)) { c.forEach(append); return; }
+    n.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  };
+  children.forEach(append);
+  return n;
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   const fastForwardSmallInput = document.getElementById('fast-forward-small');
   const fastForwardLargeInput = document.getElementById('fast-forward-large');
@@ -274,31 +299,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     const clusterNames = Object.keys(clusters);
 
     if (clusterNames.length === 0) {
-      clustersList.innerHTML = '<p class="empty-text">No tag clusters defined</p>';
+      clustersList.replaceChildren(_el('p', { class: 'empty-text' }, 'No tag clusters defined'));
       return;
     }
 
-    clustersList.innerHTML = clusterNames.map(name => `
-      <div class="cluster-item" data-cluster="${name}">
-        <div class="cluster-info">
-          <div class="cluster-name">${name}</div>
-          <div class="cluster-tags">
-            ${clusters[name].map(tag => `<span>${tag}</span>`).join('')}
-          </div>
-        </div>
-        <div class="cluster-actions">
-          <button class="remove-cluster" data-cluster="${name}" title="Remove cluster">&times;</button>
-        </div>
-      </div>
-    `).join('');
-
-    clustersList.querySelectorAll('.remove-cluster').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const clusterName = btn.dataset.cluster;
-        delete settings.tagClusters[clusterName];
+    clustersList.replaceChildren(...clusterNames.map(name => {
+      const removeBtn = _el('button', {
+        class: 'remove-cluster',
+        dataset: { cluster: name },
+        title: 'Remove cluster',
+      }, '×');
+      removeBtn.addEventListener('click', () => {
+        delete settings.tagClusters[name];
         renderClusters();
       });
-    });
+      return _el('div', { class: 'cluster-item', dataset: { cluster: name } },
+        _el('div', { class: 'cluster-info' },
+          _el('div', { class: 'cluster-name' }, name),
+          _el('div', { class: 'cluster-tags' },
+            clusters[name].map(tag => _el('span', null, tag)),
+          ),
+        ),
+        _el('div', { class: 'cluster-actions' }, removeBtn),
+      );
+    }));
   }
 
   function validateTagName(name) {

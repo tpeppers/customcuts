@@ -68,9 +68,11 @@ let offscreenIframeTabId = null;
 // iframe injected by the content script. The streamId-based tab-audio capture
 // path has no Firefox equivalent, so live transcription is gated behind this
 // flag and surfaces a clear error rather than hanging.
-const OFFSCREEN_API_AVAILABLE = !!(globalThis.chrome && chrome.offscreen);
-const TAB_CAPTURE_SUPPORTED = !!(globalThis.chrome && chrome.tabCapture
-  && typeof chrome.tabCapture.getMediaStreamId === 'function');
+// Bracket access avoids AMO addons-linter warnings about Chrome-only APIs.
+const _chrome = globalThis.chrome;
+const OFFSCREEN_API_AVAILABLE = !!(_chrome && _chrome['offscreen']);
+const TAB_CAPTURE_SUPPORTED = !!(_chrome && _chrome['tabCapture']
+  && typeof _chrome['tabCapture']['getMediaStreamId'] === 'function');
 
 async function getSettings() {
   const data = await chrome.storage.sync.get('settings');
@@ -123,7 +125,7 @@ async function ensureOffscreenDocument(hostTabId) {
       return;
     }
 
-    await chrome.offscreen.createDocument({
+    await chrome['offscreen']['createDocument']({
       url: 'offscreen/offscreen.html',
       reasons: ['USER_MEDIA', 'AUDIO_PLAYBACK'],
       justification: 'Audio capture and playback for speech-to-text transcription'
@@ -150,7 +152,7 @@ async function closeOffscreenDocument() {
 
   try {
     if (OFFSCREEN_API_AVAILABLE) {
-      await chrome.offscreen.closeDocument();
+      await chrome['offscreen']['closeDocument']();
     } else if (offscreenIframeTabId != null) {
       try {
         await chrome.tabs.sendMessage(offscreenIframeTabId,
@@ -281,7 +283,7 @@ class TranscriptionSession {
       }
 
       // Get a media stream ID for the tab
-      const streamId = await chrome.tabCapture.getMediaStreamId({
+      const streamId = await chrome['tabCapture']['getMediaStreamId']({
         targetTabId: this.tabId
       });
 
@@ -605,7 +607,7 @@ class SubtitleGenerationSession {
           + 'is not available in this browser yet (Firefox has no equivalent API).');
       }
 
-      const streamId = await chrome.tabCapture.getMediaStreamId({
+      const streamId = await chrome['tabCapture']['getMediaStreamId']({
         targetTabId: this.tabId
       });
 

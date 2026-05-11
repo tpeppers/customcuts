@@ -63,6 +63,10 @@ def transform_manifest_for_firefox(manifest: dict) -> dict:
         'id': GECKO_ID,
         'strict_min_version': '121.0',
     }
+    # "none" because data stays local (storage API + local native host).
+    fx['browser_specific_settings']['gecko']['data_collection_permissions'] = {
+        'required': ['none'],
+    }
 
     if 'permissions' in fx:
         fx['permissions'] = [p for p in fx['permissions']
@@ -116,15 +120,53 @@ def build_zip(out_path: Path, manifest_data: dict,
     print(f'wrote {out_path.name}  ({n} files, {label})')
 
 
+def bump_version(manifest_path: Path, manifest: dict, *, segment: str) -> dict:
+    """Bump major.minor.patch in-place and persist to disk.
+
+    segment='patch': 1.1.0 -> 1.1.1
+    segment='minor': 1.1.0 -> 1.2.0  (resets patch)
+
+    Required because AMO rejects re-uploads of an already-signed version.
+    """
+    parts = manifest['version'].split('.')
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        raise ValueError(f'version {manifest["version"]!r} is not major.minor.patch')
+    major, minor, patch = (int(p) for p in parts)
+    if segment == 'minor':
+        manifest['version'] = f'{major}.{minor + 1}.0'
+    elif segment == 'patch':
+        manifest['version'] = f'{major}.{minor}.{patch + 1}'
+    else:
+        raise ValueError(f'unknown bump segment: {segment!r}')
+    with open(manifest_path, 'w') as f:
+        json.dump(manifest, f, indent=2)
+        f.write('\n')
+    print(f'bumped manifest.json to version {manifest["version"]} ({segment})')
+    return manifest
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--target', choices=['chrome', 'firefox', 'both'],
                         default='both', help='which build(s) to produce')
+    parser.add_argument('--no-bump', action='store_true',
+                        help='skip the auto version bump on Firefox builds')
+    parser.add_argument('--minor', action='store_true',
+                        help='bump the minor segment instead of patch (default) on Firefox builds')
     args = parser.parse_args()
 
-    with open(SCRIPT_DIR / 'manifest.json') as f:
+    manifest_path = SCRIPT_DIR / 'manifest.json'
+    with open(manifest_path) as f:
         chrome_manifest = json.load(f)
+
+    # Firefox/AMO will reject a re-upload of an already-signed version, so
+    # every Firefox build bumps the version before zipping. Done before both
+    # builds so chrome+firefox in the same run end up at matching versions.
+    if args.target in ('firefox', 'both') and not args.no_bump:
+        segment = 'minor' if args.minor else 'patch'
+        chrome_manifest = bump_version(manifest_path, chrome_manifest,
+                                       segment=segment)
 
     files = collect_source_files()
 

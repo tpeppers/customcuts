@@ -1,3 +1,28 @@
+// DOM construction helper. Avoids innerHTML (AMO addons-linter warns on it).
+// attrs: object of attributes; `class`, `dataset`, `text`, and `on*` are special.
+function _el(tag, attrs, ...children) {
+  const n = document.createElement(tag);
+  if (attrs) {
+    for (const k of Object.keys(attrs)) {
+      const v = attrs[k];
+      if (v == null || v === false) continue;
+      if (k === 'class') n.className = v;
+      else if (k === 'dataset') Object.assign(n.dataset, v);
+      else if (k.startsWith('on') && typeof v === 'function') n.addEventListener(k.slice(2), v);
+      else if (k === 'text') n.textContent = v;
+      else if (v === true) n.setAttribute(k, '');
+      else n.setAttribute(k, v);
+    }
+  }
+  const append = (c) => {
+    if (c == null || c === false) return;
+    if (Array.isArray(c)) { c.forEach(append); return; }
+    n.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  };
+  children.forEach(append);
+  return n;
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   const videoStatus = document.getElementById('video-status');
   const noVideoSection = document.getElementById('no-video-section');
@@ -232,7 +257,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   async function renderQueue(queue) {
     if (queue.length === 0) {
-      queueList.innerHTML = '<p class="empty-text">No videos in queue</p>';
+      queueList.replaceChildren(_el('p', { class: 'empty-text' }, 'No videos in queue'));
       return;
     }
 
@@ -256,27 +281,32 @@ document.addEventListener('DOMContentLoaded', async () => {
       }) || {};
     } catch (_) { playUrls = {}; }
 
-    queueList.innerHTML = queue.map((video, index) => {
+    queueList.replaceChildren(...queue.map((video, index) => {
       const isCurrent = video.url === currentUrl;
       const pUrl = playUrls[video.url] || video.url;
-      return `
-        <div class="queue-item ${isCurrent ? 'current' : ''}" data-index="${index}">
-          <div class="queue-item-info">
-            <a class="queue-item-title queue-item-link" href="${pUrl}" target="_blank" title="${video.url}">${displayTitle(video)}</a>
-            <div class="queue-item-position">${index + 1} of ${queue.length}</div>
-          </div>
-          <button class="queue-item-remove" data-index="${index}" title="Remove from queue">&times;</button>
-        </div>
-      `;
-    }).join('');
-
-    queueList.querySelectorAll('.queue-item-remove').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
+      const removeBtn = _el('button', {
+        class: 'queue-item-remove',
+        dataset: { index: String(index) },
+        title: 'Remove from queue',
+      }, '×');
+      removeBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        const index = parseInt(btn.dataset.index);
         await removeFromQueue(index);
       });
-    });
+      return _el('div', {
+        class: isCurrent ? 'queue-item current' : 'queue-item',
+        dataset: { index: String(index) },
+      },
+        _el('div', { class: 'queue-item-info' },
+          _el('a', {
+            class: 'queue-item-title queue-item-link',
+            href: pUrl, target: '_blank', title: video.url,
+          }, displayTitle(video)),
+          _el('div', { class: 'queue-item-position' }, `${index + 1} of ${queue.length}`),
+        ),
+        removeBtn,
+      );
+    }));
   }
 
   async function removeFromQueue(index) {
@@ -492,18 +522,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const topTags = await getTopTags();
 
     if (topTags.length === 0) {
-      quickTagsContainer.innerHTML = '<span class="empty-text">No tags yet</span>';
+      quickTagsContainer.replaceChildren(_el('span', { class: 'empty-text' }, 'No tags yet'));
       return;
     }
 
-    quickTagsContainer.innerHTML = topTags.map(tag =>
-      `<button class="tag-btn" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</button>`
-    ).join('');
-
-    // Add click handlers
-    quickTagsContainer.querySelectorAll('.tag-btn').forEach(btn => {
+    quickTagsContainer.replaceChildren(...topTags.map(tag => {
+      const btn = _el('button', { class: 'tag-btn', dataset: { tag } }, tag);
       btn.addEventListener('click', async () => {
-        const tagName = btn.dataset.tag;
+        const tagName = tag;
 
         const videoId = getVideoId();
         const data = await chrome.storage.local.get(videoId);
@@ -513,28 +539,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         const response = await chrome.tabs.sendMessage(currentTab.id, { action: 'getCurrentTime' });
         const currentTime = response ? response.currentTime : 0;
 
-        // Check for duplicate (same tag name within 2 seconds)
         const isDuplicate = tags.some(existing => {
           if (existing.name.toLowerCase() !== tagName.toLowerCase()) return false;
           const existingTime = existing.timestamp ?? existing.startTime ?? 0;
           return Math.abs(existingTime - currentTime) < 2;
         });
 
-        if (isDuplicate) {
-          return; // No-op for duplicate quick tags
-        }
+        if (isDuplicate) return;
 
-        tags.push({
-          name: tagName,
-          timestamp: currentTime,
-          createdAt: Date.now()
-        });
+        tags.push({ name: tagName, timestamp: currentTime, createdAt: Date.now() });
 
         await saveVideoData({ tags });
         renderTags(tags);
         updateTagFilter(tags);
       });
-    });
+      return btn;
+    }));
   }
 
   async function getLastTags(limit = null) {
@@ -585,18 +605,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (lastTags.length === 0) {
-      lastTagsContainer.innerHTML = '<span class="empty-text">No recent tags</span>';
+      lastTagsContainer.replaceChildren(_el('span', { class: 'empty-text' }, 'No recent tags'));
       return;
     }
 
-    lastTagsContainer.innerHTML = lastTags.map(tag =>
-      `<button class="tag-btn" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</button>`
-    ).join('');
-
-    // Add click handlers
-    lastTagsContainer.querySelectorAll('.tag-btn').forEach(btn => {
+    lastTagsContainer.replaceChildren(...lastTags.map(tag => {
+      const btn = _el('button', { class: 'tag-btn', dataset: { tag } }, tag);
       btn.addEventListener('click', async () => {
-        const tagName = btn.dataset.tag;
+        const tagName = tag;
 
         const videoId = getVideoId();
         const data = await chrome.storage.local.get(videoId);
@@ -606,28 +622,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         const response = await chrome.tabs.sendMessage(currentTab.id, { action: 'getCurrentTime' });
         const currentTime = response ? response.currentTime : 0;
 
-        // Check for duplicate (same tag name within 2 seconds)
         const isDuplicate = tags.some(existing => {
           if (existing.name.toLowerCase() !== tagName.toLowerCase()) return false;
           const existingTime = existing.timestamp ?? existing.startTime ?? 0;
           return Math.abs(existingTime - currentTime) < 2;
         });
 
-        if (isDuplicate) {
-          return; // No-op for duplicate recent tags
-        }
+        if (isDuplicate) return;
 
-        tags.push({
-          name: tagName,
-          timestamp: currentTime,
-          createdAt: Date.now()
-        });
+        tags.push({ name: tagName, timestamp: currentTime, createdAt: Date.now() });
 
         await saveVideoData({ tags });
         renderTags(tags);
         updateTagFilter(tags);
       });
-    });
+      return btn;
+    }));
   }
 
   function escapeHtml(text) {
@@ -662,74 +672,73 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function renderTags(tags) {
     if (!tags || tags.length === 0) {
-      videoTagsList.innerHTML = '<p class="empty-text">No tags for this video</p>';
+      videoTagsList.replaceChildren(_el('p', { class: 'empty-text' }, 'No tags for this video'));
       return;
     }
 
-    videoTagsList.innerHTML = tags.map((tag, index) => `
-      <div class="tag-item">
-        <span class="tag-name">${escapeHtml(tag.name)}</span>
-        ${tag.startTime !== undefined ? `<span class="tag-time" data-start="${tag.startTime}" data-end="${tag.endTime}">${formatTime(tag.startTime)} - ${formatTime(tag.endTime)}</span>` : ''}
-        ${tag.intensity ? `<span class="tag-intensity">${tag.intensity}/10</span>` : ''}
-        ${tag.popText ? `<span class="tag-pop-text" title="${escapeHtml(tag.popText)}">"${escapeHtml(tag.popText.substring(0, 20))}${tag.popText.length > 20 ? '...' : ''}"</span>` : ''}
-        <button class="remove-tag" data-index="${index}">&times;</button>
-      </div>
-    `).join('');
-
-    // Click handler for tag time ranges - seek to start time
-    videoTagsList.querySelectorAll('.tag-time').forEach(timeSpan => {
-      timeSpan.addEventListener('click', async () => {
-        const startTime = parseFloat(timeSpan.dataset.start);
-        if (!isNaN(startTime) && currentTab) {
-          try {
-            await chrome.tabs.sendMessage(currentTab.id, { action: 'seekTo', time: startTime });
-          } catch (e) {
-            console.error('Failed to seek video:', e);
+    videoTagsList.replaceChildren(...tags.map((tag, index) => {
+      const kids = [_el('span', { class: 'tag-name' }, tag.name)];
+      if (tag.startTime !== undefined) {
+        const timeSpan = _el('span', {
+          class: 'tag-time',
+          dataset: { start: String(tag.startTime), end: String(tag.endTime) },
+        }, `${formatTime(tag.startTime)} - ${formatTime(tag.endTime)}`);
+        timeSpan.addEventListener('click', async () => {
+          const startTime = parseFloat(timeSpan.dataset.start);
+          if (!isNaN(startTime) && currentTab) {
+            try {
+              await chrome.tabs.sendMessage(currentTab.id, { action: 'seekTo', time: startTime });
+            } catch (e) {
+              console.error('Failed to seek video:', e);
+            }
           }
-        }
-      });
-    });
-
-    videoTagsList.querySelectorAll('.remove-tag').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        const index = parseInt(e.target.dataset.index);
+        });
+        kids.push(timeSpan);
+      }
+      if (tag.intensity) {
+        kids.push(_el('span', { class: 'tag-intensity' }, `${tag.intensity}/10`));
+      }
+      if (tag.popText) {
+        const short = tag.popText.substring(0, 20) + (tag.popText.length > 20 ? '...' : '');
+        kids.push(_el('span', { class: 'tag-pop-text', title: tag.popText }, `"${short}"`));
+      }
+      const removeBtn = _el('button', { class: 'remove-tag', dataset: { index: String(index) } }, '×');
+      removeBtn.addEventListener('click', async () => {
         const videoId = getVideoId();
         const data = await chrome.storage.local.get(videoId);
         const videoData = data[videoId] || {};
-        const tags = videoData.tags || [];
-        tags.splice(index, 1);
-        await saveVideoData({ tags });
-        renderTags(tags);
-        updateTagFilter(tags);
+        const tags2 = videoData.tags || [];
+        tags2.splice(index, 1);
+        await saveVideoData({ tags: tags2 });
+        renderTags(tags2);
+        updateTagFilter(tags2);
       });
-    });
+      kids.push(removeBtn);
+      return _el('div', { class: 'tag-item' }, kids);
+    }));
   }
 
   function updateTagFilter(tags, selectedFilters = []) {
     const uniqueTags = [...new Set(tags.map(t => t.name))];
 
     if (uniqueTags.length === 0) {
-      tagCheckboxes.innerHTML = '<p class="empty-text">No tags available</p>';
+      tagCheckboxes.replaceChildren(_el('p', { class: 'empty-text' }, 'No tags available'));
       return;
     }
 
-    tagCheckboxes.innerHTML = uniqueTags.map(name => {
+    tagCheckboxes.replaceChildren(...uniqueTags.map(name => {
       const isChecked = selectedFilters.includes(name);
-      return `
-        <label class="tag-checkbox ${isChecked ? 'checked' : ''}">
-          <input type="checkbox" value="${name}" ${isChecked ? 'checked' : ''}>
-          ${name}
-        </label>
-      `;
-    }).join('');
-
-    tagCheckboxes.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+      const checkbox = _el('input', { type: 'checkbox', value: name });
+      if (isChecked) checkbox.checked = true;
+      const label = _el('label', {
+        class: isChecked ? 'tag-checkbox checked' : 'tag-checkbox',
+      }, checkbox, ' ', name);
       checkbox.addEventListener('change', async () => {
-        const label = checkbox.parentElement;
         label.classList.toggle('checked', checkbox.checked);
         await onTagFilterChange();
       });
-    });
+      return label;
+    }));
   }
 
   function getSelectedTagFilters() {
@@ -771,30 +780,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (ratedPersons.length > 0) {
       const avgRating = ratedPersons.reduce((sum, [_, r]) => sum + r, 0) / ratedPersons.length;
 
-      let html = ratedPersons.map(([person, rating]) => `
-        <span class="person-rating">
-          <span class="person-label">${person}:</span>
-          <span class="person-stars">${renderStarsSmall(rating)}</span>
-        </span>
-      `).join('');
-
-      html += `<span class="person-rating">
-        <span class="person-label">Avg:</span>
-        <span class="person-stars">${avgRating.toFixed(1)}</span>
-      </span>`;
-
-      allRatingsDisplay.innerHTML = html;
+      const nodes = ratedPersons.map(([person, rating]) =>
+        _el('span', { class: 'person-rating' },
+          _el('span', { class: 'person-label' }, `${person}:`),
+          _el('span', { class: 'person-stars' }, ...renderStarsSmall(rating)),
+        ));
+      nodes.push(_el('span', { class: 'person-rating' },
+        _el('span', { class: 'person-label' }, 'Avg:'),
+        _el('span', { class: 'person-stars' }, avgRating.toFixed(1)),
+      ));
+      allRatingsDisplay.replaceChildren(...nodes);
     } else {
-      allRatingsDisplay.innerHTML = '';
+      allRatingsDisplay.replaceChildren();
     }
   }
 
   function renderStarsSmall(rating) {
-    let html = '';
+    const stars = [];
     for (let i = 1; i <= 5; i++) {
-      html += `<span class="${i <= rating ? '' : 'empty'}">&#9733;</span>`;
+      stars.push(_el('span', { class: i <= rating ? '' : 'empty' }, '★'));
     }
-    return html;
+    return stars;
   }
 
   // Mark start time from current video position
@@ -1177,49 +1183,47 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function renderPatternList() {
     if (allPatterns.length === 0) {
-      patternList.innerHTML = '<p class="empty-text" id="no-patterns-text">No patterns learned</p>';
+      patternList.replaceChildren(
+        _el('p', { class: 'empty-text', id: 'no-patterns-text' }, 'No patterns learned'));
       return;
     }
 
-    patternList.innerHTML = allPatterns.map(pattern => `
-      <div class="pattern-item" data-pattern-id="${pattern.id}">
-        <div class="pattern-item-left">
-          <input type="checkbox" class="pattern-checkbox"
-            ${enabledPatternIds.has(pattern.id) ? 'checked' : ''}
-            data-pattern-id="${pattern.id}">
-          <span class="pattern-item-name">${escapeHtml(pattern.name)}</span>
-          <span class="pattern-item-type">${pattern.type === 'exact' ? 'Exact' : 'Similar'}</span>
-          <span class="pattern-item-duration">${pattern.duration?.toFixed(1) || '?'}s</span>
-        </div>
-        <div class="pattern-item-right">
-          <button class="pattern-remove" data-pattern-id="${pattern.id}" title="Delete pattern">×</button>
-        </div>
-      </div>
-    `).join('');
-
-    // Add event listeners
-    patternList.querySelectorAll('.pattern-checkbox').forEach(checkbox => {
-      checkbox.addEventListener('change', (e) => {
-        const patternId = e.target.dataset.patternId;
-        if (e.target.checked) {
-          enabledPatternIds.add(patternId);
-        } else {
-          enabledPatternIds.delete(patternId);
-        }
+    patternList.replaceChildren(...allPatterns.map(pattern => {
+      const checkbox = _el('input', {
+        type: 'checkbox',
+        class: 'pattern-checkbox',
+        dataset: { patternId: pattern.id },
+      });
+      if (enabledPatternIds.has(pattern.id)) checkbox.checked = true;
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) enabledPatternIds.add(pattern.id);
+        else enabledPatternIds.delete(pattern.id);
         updatePatternDetection();
       });
-    });
 
-    patternList.querySelectorAll('.pattern-remove').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        const patternId = e.target.dataset.patternId;
-        allPatterns = allPatterns.filter(p => p.id !== patternId);
-        enabledPatternIds.delete(patternId);
+      const removeBtn = _el('button', {
+        class: 'pattern-remove',
+        dataset: { patternId: pattern.id },
+        title: 'Delete pattern',
+      }, '×');
+      removeBtn.addEventListener('click', async () => {
+        allPatterns = allPatterns.filter(p => p.id !== pattern.id);
+        enabledPatternIds.delete(pattern.id);
         await savePatterns();
         renderPatternList();
         updatePatternDetection();
       });
-    });
+
+      return _el('div', { class: 'pattern-item', dataset: { patternId: pattern.id } },
+        _el('div', { class: 'pattern-item-left' },
+          checkbox,
+          _el('span', { class: 'pattern-item-name' }, pattern.name),
+          _el('span', { class: 'pattern-item-type' }, pattern.type === 'exact' ? 'Exact' : 'Similar'),
+          _el('span', { class: 'pattern-item-duration' }, `${pattern.duration?.toFixed(1) || '?'}s`),
+        ),
+        _el('div', { class: 'pattern-item-right' }, removeBtn),
+      );
+    }));
   }
 
   function escapeHtml(text) {

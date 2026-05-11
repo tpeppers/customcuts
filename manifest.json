@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Custom Cuts",
-  "version": "1.0.0",
+  "version": "1.2.3",
   "description": "Video overlay extension providing accessibility features: subtitles, tagging, time-range skipping, and hotkey controls",
   "permissions": [
     "storage",
@@ -37,9 +37,15 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content/content.js"],
-      "css": ["content/content.css"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/content.js"
+      ],
+      "css": [
+        "content/content.css"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -70,22 +76,22 @@
       "description": "Remove currently playing video from queue"
     },
     "close-tab": {
-      "description": "Close current tab (unbound by default — set at chrome://extensions/shortcuts)"
+      "description": "Close current tab (unbound by default \u2014 set at chrome://extensions/shortcuts)"
     },
     "fast-forward-large": {
-      "description": "Fast forward video (large skip) (unbound by default — set at chrome://extensions/shortcuts)"
+      "description": "Fast forward video (large skip) (unbound by default \u2014 set at chrome://extensions/shortcuts)"
     },
     "rate-p1-one-star": {
-      "description": "Rate current video: P1 = 1 star (unbound by default — set at chrome://extensions/shortcuts)"
+      "description": "Rate current video: P1 = 1 star (unbound by default \u2014 set at chrome://extensions/shortcuts)"
     },
     "rate-p1-five-stars": {
-      "description": "Rate current video: P1 = 5 stars (unbound by default — set at chrome://extensions/shortcuts)"
+      "description": "Rate current video: P1 = 5 stars (unbound by default \u2014 set at chrome://extensions/shortcuts)"
     },
     "quicktag-review": {
-      "description": "Add REVIEW quicktag to current video (unbound by default — set at chrome://extensions/shortcuts)"
+      "description": "Add REVIEW quicktag to current video (unbound by default \u2014 set at chrome://extensions/shortcuts)"
     },
     "toggle-annotation-editor": {
-      "description": "Open/close the text-comments annotation editor (unbound by default — set at chrome://extensions/shortcuts)"
+      "description": "Open/close the text-comments annotation editor (unbound by default \u2014 set at chrome://extensions/shortcuts)"
     }
   }
 }

@@ -1,6 +1,31 @@
 (function() {
   'use strict';
 
+  // DOM construction helper. Avoids innerHTML (AMO addons-linter warns on it).
+  // attrs: object of attributes; `class`, `dataset`, `text`, and `on*` are special.
+  function _el(tag, attrs, ...children) {
+    const n = document.createElement(tag);
+    if (attrs) {
+      for (const k of Object.keys(attrs)) {
+        const v = attrs[k];
+        if (v == null || v === false) continue;
+        if (k === 'class') n.className = v;
+        else if (k === 'dataset') Object.assign(n.dataset, v);
+        else if (k.startsWith('on') && typeof v === 'function') n.addEventListener(k.slice(2), v);
+        else if (k === 'text') n.textContent = v;
+        else if (v === true) n.setAttribute(k, '');
+        else n.setAttribute(k, v);
+      }
+    }
+    const append = (c) => {
+      if (c == null || c === false) return;
+      if (Array.isArray(c)) { c.forEach(append); return; }
+      n.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    };
+    children.forEach(append);
+    return n;
+  }
+
   let videoElement = null;
   let subtitlesEnabled = false;
   let subtitleOverlay = null;
@@ -1548,25 +1573,26 @@
     annotationOverlay.classList.add('editor-active');
 
     if (!annotationToolbar) {
-      annotationToolbar = document.createElement('div');
-      annotationToolbar.className = 'custom-cuts-annotation-toolbar';
-      annotationToolbar.innerHTML = `
-        <button class="toolbar-add">+ Add Comment</button>
-        <span class="toolbar-hint">Drag to move · corner to resize · double-click to edit text</span>
-        <label class="toolbar-window">Show ±<input type="number" class="toolbar-window-input" min="0" max="36000" step="1" value="${annotationEditWindow}">s</label>
-        <button class="toolbar-done">Done</button>
-      `;
-      annotationToolbar.querySelector('.toolbar-add').addEventListener('click', () => {
-        addAnnotationAtCurrentTime();
+      annotationToolbar = _el('div', { class: 'custom-cuts-annotation-toolbar' });
+      const addBtn = _el('button', { class: 'toolbar-add' }, '+ Add Comment');
+      addBtn.addEventListener('click', () => { addAnnotationAtCurrentTime(); });
+      const hint = _el('span', { class: 'toolbar-hint' },
+        'Drag to move · corner to resize · double-click to edit text');
+      const windowInput = _el('input', {
+        type: 'number',
+        class: 'toolbar-window-input',
+        min: '0', max: '36000', step: '1',
+        value: String(annotationEditWindow),
       });
-      annotationToolbar.querySelector('.toolbar-done').addEventListener('click', () => {
-        exitAnnotationEditor();
-      });
-      const windowInput = annotationToolbar.querySelector('.toolbar-window-input');
       windowInput.addEventListener('input', async () => {
         await saveAnnotationEditWindow(windowInput.value);
         renderAnnotations();
       });
+      const windowLabel = _el('label', { class: 'toolbar-window' },
+        'Show ±', windowInput, 's');
+      const doneBtn = _el('button', { class: 'toolbar-done' }, 'Done');
+      doneBtn.addEventListener('click', () => { exitAnnotationEditor(); });
+      annotationToolbar.append(addBtn, hint, windowLabel, doneBtn);
     } else {
       // Toolbar persists across enter/exit cycles — refresh the input value
       // in case the preference was changed elsewhere.
@@ -1653,45 +1679,47 @@
     const style = ann.style || defaultAnnotationStyle();
     const shape = ann.shape || defaultAnnotationShape();
 
-    annotationPropsPanel.innerHTML = `
-      <label>Text</label>
-      <textarea data-field="text">${escapeAttr(ann.text || '')}</textarea>
+    const textArea = _el('textarea', { dataset: { field: 'text' } }, ann.text || '');
+    const startInput = _el('input', { type: 'text', class: 'time', dataset: { field: 'startTime' }, value: formatTimeMS(ann.startTime) });
+    const endInput = _el('input', { type: 'text', class: 'time', dataset: { field: 'endTime' }, value: formatTimeMS(ann.endTime) });
+    const fontSizeInput = _el('input', { type: 'number', class: 'font-size', dataset: { field: 'fontSize' }, min: '8', max: '80', value: String(style.fontSize || 16) });
+    const textColorInput = _el('input', { type: 'color', dataset: { field: 'textColor' }, value: style.textColor || '#ffffff' });
+    const bgColorInput = _el('input', { type: 'color', dataset: { field: 'bgColor' }, value: style.bgColor || '#000000' });
+    const bgOpacityInput = _el('input', { type: 'number', class: 'opacity-input', dataset: { field: 'bgOpacity' }, min: '0', max: '100', value: String(style.bgOpacity ?? 80), title: 'Background opacity %' });
+    const shapeSelect = _el('select', { dataset: { field: 'shapeType' } },
+      ...['none', 'dot', 'circle', 'arrow'].map(type => {
+        const opt = _el('option', { value: type }, type[0].toUpperCase() + type.slice(1));
+        if (shape.type === type) opt.selected = true;
+        return opt;
+      }));
+    const shapeColorInput = _el('input', { type: 'color', dataset: { field: 'shapeColor' }, value: shape.color || '#e74c3c' });
+    const strokeInput = _el('input', { type: 'number', class: 'font-size', dataset: { field: 'strokeWidth' }, min: '1', max: '20', value: String(shape.strokeWidth || 3) });
 
-      <label>Time</label>
-      <div class="row">
-        <input type="text" class="time" data-field="startTime" value="${formatTimeMS(ann.startTime)}">
-        <button class="btn-now" data-now="start">Now</button>
-        <span>to</span>
-        <input type="text" class="time" data-field="endTime" value="${formatTimeMS(ann.endTime)}">
-        <button class="btn-now" data-now="end">Now</button>
-      </div>
-
-      <label>Style</label>
-      <div class="row">
-        <span>Size</span>
-        <input type="number" class="font-size" data-field="fontSize" min="8" max="80" value="${style.fontSize || 16}">
-        <span>Text</span>
-        <input type="color" data-field="textColor" value="${style.textColor || '#ffffff'}">
-        <span>BG</span>
-        <input type="color" data-field="bgColor" value="${style.bgColor || '#000000'}">
-        <input type="number" class="opacity-input" data-field="bgOpacity" min="0" max="100" value="${style.bgOpacity ?? 80}" title="Background opacity %">
-      </div>
-
-      <label>Shape</label>
-      <div class="row">
-        <select data-field="shapeType">
-          <option value="none" ${shape.type === 'none' ? 'selected' : ''}>None</option>
-          <option value="dot" ${shape.type === 'dot' ? 'selected' : ''}>Dot</option>
-          <option value="circle" ${shape.type === 'circle' ? 'selected' : ''}>Circle</option>
-          <option value="arrow" ${shape.type === 'arrow' ? 'selected' : ''}>Arrow</option>
-        </select>
-        <span>Color</span>
-        <input type="color" data-field="shapeColor" value="${shape.color || '#e74c3c'}">
-        <span>Width</span>
-        <input type="number" class="font-size" data-field="strokeWidth" min="1" max="20" value="${shape.strokeWidth || 3}">
-        <button class="btn-delete" data-action="delete">Delete</button>
-      </div>
-    `;
+    annotationPropsPanel.replaceChildren(
+      _el('label', null, 'Text'),
+      textArea,
+      _el('label', null, 'Time'),
+      _el('div', { class: 'row' },
+        startInput,
+        _el('button', { class: 'btn-now', dataset: { now: 'start' } }, 'Now'),
+        _el('span', null, 'to'),
+        endInput,
+        _el('button', { class: 'btn-now', dataset: { now: 'end' } }, 'Now'),
+      ),
+      _el('label', null, 'Style'),
+      _el('div', { class: 'row' },
+        _el('span', null, 'Size'), fontSizeInput,
+        _el('span', null, 'Text'), textColorInput,
+        _el('span', null, 'BG'), bgColorInput, bgOpacityInput,
+      ),
+      _el('label', null, 'Shape'),
+      _el('div', { class: 'row' },
+        shapeSelect,
+        _el('span', null, 'Color'), shapeColorInput,
+        _el('span', null, 'Width'), strokeInput,
+        _el('button', { class: 'btn-delete', dataset: { action: 'delete' } }, 'Delete'),
+      ),
+    );
 
     // Wire up handlers
     annotationPropsPanel.querySelectorAll('[data-field]').forEach(input => {

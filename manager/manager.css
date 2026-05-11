@@ -810,6 +810,20 @@ h3 {
   font-size: 13px;
 }
 
+.empty-text.padded {
+  padding: 12px;
+}
+
+.empty-text.padded-centered {
+  padding: 16px;
+  text-align: center;
+}
+
+.local-badge {
+  color: #4ade80;
+  font-size: 11px;
+}
+
 /* Playlist Styles */
 .playlist-controls {
   background: white;

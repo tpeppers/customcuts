@@ -1,3 +1,28 @@
+// DOM construction helper. Avoids innerHTML (AMO addons-linter warns on it).
+// attrs: object of attributes; `class`, `dataset`, `text`, and `on*` are special.
+function _el(tag, attrs, ...children) {
+  const n = document.createElement(tag);
+  if (attrs) {
+    for (const k of Object.keys(attrs)) {
+      const v = attrs[k];
+      if (v == null || v === false) continue;
+      if (k === 'class') n.className = v;
+      else if (k === 'dataset') Object.assign(n.dataset, v);
+      else if (k.startsWith('on') && typeof v === 'function') n.addEventListener(k.slice(2), v);
+      else if (k === 'text') n.textContent = v;
+      else if (v === true) n.setAttribute(k, '');
+      else n.setAttribute(k, v);
+    }
+  }
+  const append = (c) => {
+    if (c == null || c === false) return;
+    if (Array.isArray(c)) { c.forEach(append); return; }
+    n.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  };
+  children.forEach(append);
+  return n;
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   const searchInput = document.getElementById('search-input');
   const includeTagsContainer = document.getElementById('include-tags');
@@ -333,18 +358,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     const sortedTags = [...allTags].sort();
 
     // Render include tags
-    includeTagsContainer.innerHTML = sortedTags.map(tag => `
-      <button class="filter-tag-chip ${selectedIncludeTags.has(tag) ? 'active' : ''}" data-tag="${tag}">
-        ${tag}
-      </button>
-    `).join('') || '<span class="empty-text">No tags available</span>';
+    if (sortedTags.length === 0) {
+      includeTagsContainer.replaceChildren(_el('span', { class: 'empty-text' }, 'No tags available'));
+    } else {
+      includeTagsContainer.replaceChildren(...sortedTags.map(tag => _el('button', {
+        class: `filter-tag-chip ${selectedIncludeTags.has(tag) ? 'active' : ''}`,
+        dataset: { tag }
+      }, tag)));
+    }
 
     // Render exclude tags
-    excludeTagsContainer.innerHTML = sortedTags.map(tag => `
-      <button class="filter-tag-chip exclude ${selectedExcludeTags.has(tag) ? 'active' : ''}" data-tag="${tag}">
-        ${tag}
-      </button>
-    `).join('') || '<span class="empty-text">No tags available</span>';
+    if (sortedTags.length === 0) {
+      excludeTagsContainer.replaceChildren(_el('span', { class: 'empty-text' }, 'No tags available'));
+    } else {
+      excludeTagsContainer.replaceChildren(...sortedTags.map(tag => _el('button', {
+        class: `filter-tag-chip exclude ${selectedExcludeTags.has(tag) ? 'active' : ''}`,
+        dataset: { tag }
+      }, tag)));
+    }
 
     // Add click handlers for include tags
     includeTagsContainer.querySelectorAll('.filter-tag-chip').forEach(chip => {
@@ -559,29 +590,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function renderStars(rating) {
-    let html = '';
+    const frag = document.createDocumentFragment();
     for (let i = 1; i <= 5; i++) {
-      html += `<span class="${i <= rating ? '' : 'empty'}">&#9733;</span>`;
+      frag.append(_el('span', { class: i <= rating ? null : 'empty' }, '★'));
     }
-    return html;
+    return frag;
   }
 
   function renderRatingsSummary(ratings) {
     const entries = Object.entries(ratings).filter(([_, r]) => r > 0);
     if (entries.length === 0) {
-      return '<span class="video-rating empty">No ratings</span>';
+      return _el('span', { class: 'video-rating empty' }, 'No ratings');
     }
 
     const avg = calculateAvgRating(ratings);
-    let html = '<div class="video-ratings-summary">';
+    const wrap = _el('div', { class: 'video-ratings-summary' });
 
     entries.forEach(([person, rating]) => {
-      html += `<span class="rating-badge">${person}: ${rating}★</span>`;
+      wrap.append(_el('span', { class: 'rating-badge' }, `${person}: ${rating}★`));
     });
 
-    html += `<span class="rating-badge avg">Avg: ${avg.toFixed(1)}★</span>`;
-    html += '</div>';
-    return html;
+    wrap.append(_el('span', { class: 'rating-badge avg' }, `Avg: ${avg.toFixed(1)}★`));
+    return wrap;
   }
 
   function renderVideos() {
@@ -593,57 +623,73 @@ document.addEventListener('DOMContentLoaded', async () => {
     tagCount.textContent = `${totalTags} total tag${totalTags !== 1 ? 's' : ''}`;
 
     if (filtered.length === 0) {
-      videoList.innerHTML = '<p class="empty-state">No tagged videos found. Start tagging videos to see them here!</p>';
+      videoList.replaceChildren(_el('p', { class: 'empty-state' }, 'No tagged videos found. Start tagging videos to see them here!'));
       return;
     }
 
-    videoList.innerHTML = filtered.map(video => {
+    videoList.replaceChildren(...filtered.map(video => {
       const pUrl = playUrl(video.url);
       const isLocal = pUrl !== video.url;
-      return `
-      <div class="video-card" data-id="${video.id}">
-        <div class="video-info">
-          <div class="video-title">
-            <a href="${pUrl}" target="_blank" title="${video.url}">${video.title}</a>
-            ${isLocal ? '<span style="color:#4ade80;font-size:11px" title="Local file available"> [local]</span>' : ''}
-          </div>
-          <div class="video-url">
-            <a href="${pUrl}" target="_blank">${video.url}</a>
-          </div>
-          <div class="video-meta">
-            ${renderRatingsSummary(video.ratings)}
-            <span>${video.tags.length} tag${video.tags.length !== 1 ? 's' : ''}</span>
-          </div>
-          <div class="video-tags">
-            ${video.tags.slice(0, 8).map(tag => `
-              <span class="tag-chip ${tag._virtual && tag._duration ? 'tag-length' : tag._virtual ? 'tag-auto' : ''} ${tag.name === 'TITLE' ? 'tag-title' : ''} ${tag.startTime !== undefined ? 'has-time' : ''}" ${tag.popText ? `title="${escapeHtml(tag.popText)}"` : ''}>
-                ${escapeHtml(tag.name)}${tag.titleText ? ': ' + escapeHtml(tag.titleText) : ''}
-                ${tag.startTime !== undefined ? `<small>(${formatTime(tag.startTime)})</small>` : ''}
-                ${tag.intensity ? `<span class="intensity">${tag.intensity}</span>` : ''}
-                ${tag.popText ? `<small class="pop-preview">"${escapeHtml(tag.popText.substring(0, 15))}${tag.popText.length > 15 ? '...' : ''}"</small>` : ''}
-              </span>
-            `).join('')}
-            ${video.tags.length > 8 ? `<span class="tag-chip">+${video.tags.length - 8} more</span>` : ''}
-          </div>
-          ${video.feedback ? `<div class="video-feedback">${escapeHtml(video.feedback)}</div>` : ''}
-        </div>
-        <div class="video-actions">
-          <button class="btn btn-primary edit-btn" data-id="${video.id}">Edit Tags</button>
-          <button class="btn btn-secondary open-btn" data-url="${pUrl}">Open</button>
-        </div>
-      </div>
-    `}).join('');
 
-    // Add event listeners
-    videoList.querySelectorAll('.edit-btn').forEach(btn => {
-      btn.addEventListener('click', () => openEditModal(btn.dataset.id));
-    });
+      const tagChips = video.tags.slice(0, 8).map(tag => {
+        const chipClasses = ['tag-chip'];
+        if (tag._virtual && tag._duration) chipClasses.push('tag-length');
+        else if (tag._virtual) chipClasses.push('tag-auto');
+        if (tag.name === 'TITLE') chipClasses.push('tag-title');
+        if (tag.startTime !== undefined) chipClasses.push('has-time');
 
-    videoList.querySelectorAll('.open-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        chrome.tabs.create({ url: btn.dataset.url });
+        const chip = _el('span', {
+          class: chipClasses.join(' '),
+          title: tag.popText || null
+        }, tag.name + (tag.titleText ? ': ' + tag.titleText : ''));
+
+        if (tag.startTime !== undefined) {
+          chip.append(' ', _el('small', null, `(${formatTime(tag.startTime)})`));
+        }
+        if (tag.intensity) {
+          chip.append(' ', _el('span', { class: 'intensity' }, String(tag.intensity)));
+        }
+        if (tag.popText) {
+          const preview = tag.popText.substring(0, 15) + (tag.popText.length > 15 ? '...' : '');
+          chip.append(' ', _el('small', { class: 'pop-preview' }, `"${preview}"`));
+        }
+        return chip;
       });
-    });
+      if (video.tags.length > 8) {
+        tagChips.push(_el('span', { class: 'tag-chip' }, `+${video.tags.length - 8} more`));
+      }
+
+      const titleDiv = _el('div', { class: 'video-title' },
+        _el('a', { href: pUrl, target: '_blank', title: video.url }, video.title),
+        isLocal ? _el('span', { class: 'local-badge', title: 'Local file available' }, ' [local]') : null
+      );
+
+      const urlDiv = _el('div', { class: 'video-url' },
+        _el('a', { href: pUrl, target: '_blank' }, video.url)
+      );
+
+      const metaDiv = _el('div', { class: 'video-meta' },
+        renderRatingsSummary(video.ratings),
+        _el('span', null, `${video.tags.length} tag${video.tags.length !== 1 ? 's' : ''}`)
+      );
+
+      const tagsDiv = _el('div', { class: 'video-tags' }, tagChips);
+
+      const infoChildren = [titleDiv, urlDiv, metaDiv, tagsDiv];
+      if (video.feedback) {
+        infoChildren.push(_el('div', { class: 'video-feedback' }, video.feedback));
+      }
+
+      const editBtn = _el('button', { class: 'btn btn-primary edit-btn', dataset: { id: video.id } }, 'Edit Tags');
+      editBtn.addEventListener('click', () => openEditModal(video.id));
+      const openBtn = _el('button', { class: 'btn btn-secondary open-btn', dataset: { url: pUrl } }, 'Open');
+      openBtn.addEventListener('click', () => { chrome.tabs.create({ url: pUrl }); });
+
+      return _el('div', { class: 'video-card', dataset: { id: video.id } },
+        _el('div', { class: 'video-info' }, infoChildren),
+        _el('div', { class: 'video-actions' }, editBtn, openBtn)
+      );
+    }));
   }
 
   async function openEditModal(videoId) {
@@ -695,50 +741,53 @@ document.addEventListener('DOMContentLoaded', async () => {
     const entries = Object.entries(ratings).filter(([_, r]) => r > 0);
     if (entries.length > 0) {
       const avg = calculateAvgRating(ratings);
-      let html = entries.map(([person, rating]) => `
-        <span class="modal-person-rating">
-          <span class="person-label">${person}:</span>
-          <span class="person-stars">${renderStars(rating)}</span>
-        </span>
-      `).join('');
+      const nodes = entries.map(([person, rating]) =>
+        _el('span', { class: 'modal-person-rating' },
+          _el('span', { class: 'person-label' }, `${person}:`),
+          _el('span', { class: 'person-stars' }, renderStars(rating))
+        )
+      );
 
-      html += `
-        <span class="modal-person-rating average">
-          <span class="person-label">Average:</span>
-          <span class="person-stars">${avg.toFixed(1)}</span>
-        </span>
-      `;
+      nodes.push(_el('span', { class: 'modal-person-rating average' },
+        _el('span', { class: 'person-label' }, 'Average:'),
+        _el('span', { class: 'person-stars' }, avg.toFixed(1))
+      ));
 
-      modalAllRatings.innerHTML = html;
+      modalAllRatings.replaceChildren(...nodes);
     } else {
-      modalAllRatings.innerHTML = '<span class="empty-text">No ratings yet</span>';
+      modalAllRatings.replaceChildren(_el('span', { class: 'empty-text' }, 'No ratings yet'));
     }
   }
 
   function renderModalTags(tags) {
     if (!tags || tags.length === 0) {
-      modalTagsList.innerHTML = '<p class="empty-text">No tags</p>';
+      modalTagsList.replaceChildren(_el('p', { class: 'empty-text' }, 'No tags'));
       return;
     }
 
-    modalTagsList.innerHTML = tags.map((tag, index) => `
-      <div class="modal-tag-item">
-        <div class="modal-tag-info">
-          <span class="modal-tag-name">${escapeHtml(tag.name)}</span>
-          ${tag.startTime !== undefined ? `<span class="modal-tag-time">${formatTime(tag.startTime)} - ${formatTime(tag.endTime)}</span>` : ''}
-          ${tag.intensity ? `<span class="modal-tag-intensity">${tag.intensity}/10</span>` : ''}
-          ${tag.popText ? `<span class="modal-tag-pop-text" title="${escapeHtml(tag.popText)}">"${escapeHtml(tag.popText.substring(0, 30))}${tag.popText.length > 30 ? '...' : ''}"</span>` : ''}
-        </div>
-        <button class="remove-tag-btn" data-index="${index}">&times;</button>
-      </div>
-    `).join('');
+    modalTagsList.replaceChildren(...tags.map((tag, index) => {
+      const infoChildren = [_el('span', { class: 'modal-tag-name' }, tag.name)];
+      if (tag.startTime !== undefined) {
+        infoChildren.push(_el('span', { class: 'modal-tag-time' }, `${formatTime(tag.startTime)} - ${formatTime(tag.endTime)}`));
+      }
+      if (tag.intensity) {
+        infoChildren.push(_el('span', { class: 'modal-tag-intensity' }, `${tag.intensity}/10`));
+      }
+      if (tag.popText) {
+        const preview = tag.popText.substring(0, 30) + (tag.popText.length > 30 ? '...' : '');
+        infoChildren.push(_el('span', { class: 'modal-tag-pop-text', title: tag.popText }, `"${preview}"`));
+      }
 
-    modalTagsList.querySelectorAll('.remove-tag-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const index = parseInt(btn.dataset.index);
+      const removeBtn = _el('button', { class: 'remove-tag-btn', dataset: { index } }, '×');
+      removeBtn.addEventListener('click', async () => {
         await removeTag(index);
       });
-    });
+
+      return _el('div', { class: 'modal-tag-item' },
+        _el('div', { class: 'modal-tag-info' }, infoChildren),
+        removeBtn
+      );
+    }));
   }
 
   async function removeTag(index) {
@@ -833,21 +882,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     const topTags = getTopTags(allVideos, 20);
 
     if (topTags.length === 0) {
-      quickTagsContainer.innerHTML = '<span class="empty-text">No tags yet</span>';
+      quickTagsContainer.replaceChildren(_el('span', { class: 'empty-text' }, 'No tags yet'));
       return;
     }
 
-    quickTagsContainer.innerHTML = topTags.map(tag =>
-      `<button class="quick-tag-btn" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</button>`
-    ).join('');
-
-    // Add click handlers
-    quickTagsContainer.querySelectorAll('.quick-tag-btn').forEach(btn => {
+    quickTagsContainer.replaceChildren(...topTags.map(tag => {
+      const btn = _el('button', { class: 'quick-tag-btn', dataset: { tag } }, tag);
       btn.addEventListener('click', async () => {
-        const tagName = btn.dataset.tag;
-        await addTag(tagName, 0, null, null);
+        await addTag(tag, 0, null, null);
       });
-    });
+      return btn;
+    }));
   }
 
   function closeModal() {
@@ -883,7 +928,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     playlistCount.textContent = `${packPlaylists.length} playlist${packPlaylists.length !== 1 ? 's' : ''}`;
 
     if (packPlaylists.length === 0) {
-      playlistList.innerHTML = '<p class="empty-state">No playlists yet. Create one above!</p>';
+      playlistList.replaceChildren(_el('p', { class: 'empty-state' }, 'No playlists yet. Create one above!'));
       return;
     }
 
@@ -893,31 +938,22 @@ document.addEventListener('DOMContentLoaded', async () => {
       originalIndex: allPlaylists.indexOf(playlist)
     }));
 
-    playlistList.innerHTML = playlistsWithIndex.map(({ playlist, originalIndex }) => `
-      <div class="playlist-card" data-index="${originalIndex}">
-        <div class="playlist-info">
-          <h4>${playlist.name}</h4>
-          <span class="playlist-meta">${playlist.videos.length} video${playlist.videos.length !== 1 ? 's' : ''}</span>
-        </div>
-        <div class="playlist-actions">
-          <button class="btn btn-success play-playlist-btn" data-index="${originalIndex}">Play</button>
-          <button class="btn btn-secondary shuffle-playlist-btn" data-index="${originalIndex}">Shuffle</button>
-          <button class="btn btn-primary edit-playlist-btn" data-index="${originalIndex}">Edit</button>
-        </div>
-      </div>
-    `).join('');
+    playlistList.replaceChildren(...playlistsWithIndex.map(({ playlist, originalIndex }) => {
+      const playBtn = _el('button', { class: 'btn btn-success play-playlist-btn', dataset: { index: originalIndex } }, 'Play');
+      playBtn.addEventListener('click', () => playPlaylist(originalIndex));
+      const shuffleBtn = _el('button', { class: 'btn btn-secondary shuffle-playlist-btn', dataset: { index: originalIndex } }, 'Shuffle');
+      shuffleBtn.addEventListener('click', () => playPlaylistShuffled(originalIndex));
+      const editBtn = _el('button', { class: 'btn btn-primary edit-playlist-btn', dataset: { index: originalIndex } }, 'Edit');
+      editBtn.addEventListener('click', () => openPlaylistModal(originalIndex));
 
-    playlistList.querySelectorAll('.edit-playlist-btn').forEach(btn => {
-      btn.addEventListener('click', () => openPlaylistModal(parseInt(btn.dataset.index)));
-    });
-
-    playlistList.querySelectorAll('.play-playlist-btn').forEach(btn => {
-      btn.addEventListener('click', () => playPlaylist(parseInt(btn.dataset.index)));
-    });
-
-    playlistList.querySelectorAll('.shuffle-playlist-btn').forEach(btn => {
-      btn.addEventListener('click', () => playPlaylistShuffled(parseInt(btn.dataset.index)));
-    });
+      return _el('div', { class: 'playlist-card', dataset: { index: originalIndex } },
+        _el('div', { class: 'playlist-info' },
+          _el('h4', null, playlist.name),
+          _el('span', { class: 'playlist-meta' }, `${playlist.videos.length} video${playlist.videos.length !== 1 ? 's' : ''}`)
+        ),
+        _el('div', { class: 'playlist-actions' }, playBtn, shuffleBtn, editBtn)
+      );
+    }));
   }
 
   async function createPlaylist(name) {
@@ -952,7 +988,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Find the video in allVideos to get its tags
     const videoData = allVideos.find(v => v.url === videoUrl);
     if (!videoData || !videoData.tags) {
-      return '<span class="action-badge badge-00" title="No Action Start tag">[00]</span>';
+      return _el('span', { class: 'action-badge badge-00', title: 'No Action Start tag' }, '[00]');
     }
 
     // Find Action Start tag
@@ -961,15 +997,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     );
 
     if (!actionStartTag) {
-      return '<span class="action-badge badge-00" title="No Action Start tag">[00]</span>';
+      return _el('span', { class: 'action-badge badge-00', title: 'No Action Start tag' }, '[00]');
     }
 
     // Check if start and end are the same (0-length)
     if (actionStartTag.startTime === actionStartTag.endTime) {
-      return '<span class="action-badge badge-a1" title="Action Start (0 length)">[A1]</span>';
+      return _el('span', { class: 'action-badge badge-a1', title: 'Action Start (0 length)' }, '[A1]');
     }
 
-    return '<span class="action-badge badge-a2" title="Action Start (has duration)">[A2]</span>';
+    return _el('span', { class: 'action-badge badge-a2', title: 'Action Start (has duration)' }, '[A2]');
   }
 
   function displayTitleForUrl(url, fallback) {
@@ -982,49 +1018,62 @@ document.addEventListener('DOMContentLoaded', async () => {
     playlistVideoCount.textContent = currentPlaylistVideos.length;
 
     if (currentPlaylistVideos.length === 0) {
-      playlistVideosList.innerHTML = '<p class="empty-text" style="padding: 12px;">No videos in playlist</p>';
+      playlistVideosList.replaceChildren(_el('p', { class: 'empty-text padded' },'No videos in playlist'));
       return;
     }
 
-    playlistVideosList.innerHTML = currentPlaylistVideos.map((video, index) => {
+    playlistVideosList.replaceChildren(...currentPlaylistVideos.map((video, index) => {
       const pUrl = playUrl(video.url);
       const isLocal = pUrl !== video.url;
-      return `
-      <div class="playlist-video-item" data-index="${index}">
-        ${getActionStartBadge(video.url)}
-        <div class="video-item-info">
-          <div class="video-item-title"><a href="${pUrl}" target="_blank">${escapeHtml(displayTitleForUrl(video.url, video.title))}</a>${isLocal ? ' <span style="color:#4ade80;font-size:11px">[local]</span>' : ''}</div>
-          <div class="video-item-url"><a href="${pUrl}" target="_blank">${escapeHtml(video.url)}</a></div>
-        </div>
-        <div class="video-item-actions">
-          <button class="video-item-btn move" data-dir="up" data-index="${index}" ${index === 0 ? 'disabled' : ''}>↑</button>
-          <button class="video-item-btn move" data-dir="down" data-index="${index}" ${index === currentPlaylistVideos.length - 1 ? 'disabled' : ''}>↓</button>
-          <button class="video-item-btn remove" data-index="${index}">Remove</button>
-        </div>
-      </div>
-    `}).join('');
 
-    playlistVideosList.querySelectorAll('.video-item-btn.remove').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const idx = parseInt(btn.dataset.index);
-        currentPlaylistVideos.splice(idx, 1);
+      const titleDiv = _el('div', { class: 'video-item-title' },
+        _el('a', { href: pUrl, target: '_blank' }, displayTitleForUrl(video.url, video.title)),
+        isLocal ? ' ' : null,
+        isLocal ? _el('span', { class: 'local-badge' }, '[local]') : null
+      );
+      const urlDiv = _el('div', { class: 'video-item-url' },
+        _el('a', { href: pUrl, target: '_blank' }, video.url)
+      );
+
+      const upBtn = _el('button', {
+        class: 'video-item-btn move',
+        dataset: { dir: 'up', index },
+        disabled: index === 0 ? true : null
+      }, '↑');
+      upBtn.addEventListener('click', () => {
+        const idx = index;
+        if (idx > 0) {
+          [currentPlaylistVideos[idx], currentPlaylistVideos[idx - 1]] = [currentPlaylistVideos[idx - 1], currentPlaylistVideos[idx]];
+          renderPlaylistVideos();
+        }
+      });
+
+      const downBtn = _el('button', {
+        class: 'video-item-btn move',
+        dataset: { dir: 'down', index },
+        disabled: index === currentPlaylistVideos.length - 1 ? true : null
+      }, '↓');
+      downBtn.addEventListener('click', () => {
+        const idx = index;
+        if (idx < currentPlaylistVideos.length - 1) {
+          [currentPlaylistVideos[idx], currentPlaylistVideos[idx + 1]] = [currentPlaylistVideos[idx + 1], currentPlaylistVideos[idx]];
+          renderPlaylistVideos();
+        }
+      });
+
+      const removeBtn = _el('button', { class: 'video-item-btn remove', dataset: { index } }, 'Remove');
+      removeBtn.addEventListener('click', () => {
+        currentPlaylistVideos.splice(index, 1);
         renderPlaylistVideos();
         renderAvailableVideos();
       });
-    });
 
-    playlistVideosList.querySelectorAll('.video-item-btn.move').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const idx = parseInt(btn.dataset.index);
-        const dir = btn.dataset.dir;
-        if (dir === 'up' && idx > 0) {
-          [currentPlaylistVideos[idx], currentPlaylistVideos[idx - 1]] = [currentPlaylistVideos[idx - 1], currentPlaylistVideos[idx]];
-        } else if (dir === 'down' && idx < currentPlaylistVideos.length - 1) {
-          [currentPlaylistVideos[idx], currentPlaylistVideos[idx + 1]] = [currentPlaylistVideos[idx + 1], currentPlaylistVideos[idx]];
-        }
-        renderPlaylistVideos();
-      });
-    });
+      return _el('div', { class: 'playlist-video-item', dataset: { index } },
+        getActionStartBadge(video.url),
+        _el('div', { class: 'video-item-info' }, titleDiv, urlDiv),
+        _el('div', { class: 'video-item-actions' }, upBtn, downBtn, removeBtn)
+      );
+    }));
   }
 
   function renderAvailableVideos() {
@@ -1041,36 +1090,39 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (available.length === 0) {
-      availableVideosList.innerHTML = '<p class="empty-text" style="padding: 12px;">No videos available</p>';
+      availableVideosList.replaceChildren(_el('p', { class: 'empty-text padded' },'No videos available'));
       return;
     }
 
-    availableVideosList.innerHTML = available.map(video => {
+    availableVideosList.replaceChildren(...available.map(video => {
       const pUrl = playUrl(video.url);
       const isLocal = pUrl !== video.url;
-      return `
-      <div class="available-video-item" data-url="${escapeHtml(video.url)}">
-        ${getActionStartBadge(video.url)}
-        <div class="video-item-info">
-          <div class="video-item-title"><a href="${pUrl}" target="_blank">${escapeHtml(displayTitleForUrl(video.url, video.title))}</a>${isLocal ? ' <span style="color:#4ade80;font-size:11px">[local]</span>' : ''}</div>
-          <div class="video-item-url"><a href="${pUrl}" target="_blank">${escapeHtml(video.url)}</a></div>
-        </div>
-        <div class="video-item-actions">
-          <button class="video-item-btn add" data-url="${escapeHtml(video.url)}" data-title="${escapeHtml(video.title)}">Add</button>
-        </div>
-      </div>
-    `}).join('');
 
-    availableVideosList.querySelectorAll('.video-item-btn.add').forEach(btn => {
-      btn.addEventListener('click', () => {
-        currentPlaylistVideos.push({
-          url: btn.dataset.url,
-          title: btn.dataset.title
-        });
+      const titleDiv = _el('div', { class: 'video-item-title' },
+        _el('a', { href: pUrl, target: '_blank' }, displayTitleForUrl(video.url, video.title)),
+        isLocal ? ' ' : null,
+        isLocal ? _el('span', { class: 'local-badge' }, '[local]') : null
+      );
+      const urlDiv = _el('div', { class: 'video-item-url' },
+        _el('a', { href: pUrl, target: '_blank' }, video.url)
+      );
+
+      const addBtn = _el('button', {
+        class: 'video-item-btn add',
+        dataset: { url: video.url, title: video.title }
+      }, 'Add');
+      addBtn.addEventListener('click', () => {
+        currentPlaylistVideos.push({ url: video.url, title: video.title });
         renderPlaylistVideos();
         renderAvailableVideos();
       });
-    });
+
+      return _el('div', { class: 'available-video-item', dataset: { url: video.url } },
+        getActionStartBadge(video.url),
+        _el('div', { class: 'video-item-info' }, titleDiv, urlDiv),
+        _el('div', { class: 'video-item-actions' }, addBtn)
+      );
+    }));
   }
 
   async function saveCurrentPlaylist() {
@@ -1221,63 +1273,70 @@ document.addEventListener('DOMContentLoaded', async () => {
     bgMusicCount.textContent = `${allBgMusicLinks.length} link${allBgMusicLinks.length !== 1 ? 's' : ''}`;
 
     if (allBgMusicLinks.length === 0) {
-      bgMusicList.innerHTML = '<p class="empty-state">No background music links yet. Add one above!</p>';
+      bgMusicList.replaceChildren(_el('p', { class: 'empty-state' }, 'No background music links yet. Add one above!'));
       return;
     }
 
-    bgMusicList.innerHTML = allBgMusicLinks.map((link, index) => `
-      <div class="bgmusic-item" data-index="${index}">
-        <label class="bgmusic-radio-label">
-          <input type="radio" name="bgmusic-selection" value="${escapeHtml(link.url)}" ${link.url === bgMusicSelectedUrl ? 'checked' : ''}>
-        </label>
-        <div class="bgmusic-item-info">
-          <div class="bgmusic-item-name">${escapeHtml(link.name)}</div>
-          <div class="bgmusic-item-url"><a href="${escapeHtml(link.url)}" target="_blank">${escapeHtml(link.url)}</a></div>
-        </div>
-        <div class="bgmusic-item-actions">
-          <button class="video-item-btn move" data-dir="up" data-index="${index}" ${index === 0 ? 'disabled' : ''}>&#8593;</button>
-          <button class="video-item-btn move" data-dir="down" data-index="${index}" ${index === allBgMusicLinks.length - 1 ? 'disabled' : ''}>&#8595;</button>
-          <button class="video-item-btn remove" data-index="${index}">Delete</button>
-        </div>
-      </div>
-    `).join('');
-
-    // Radio button selection handlers
-    bgMusicList.querySelectorAll('input[name="bgmusic-selection"]').forEach(radio => {
+    bgMusicList.replaceChildren(...allBgMusicLinks.map((link, index) => {
+      const radio = _el('input', {
+        type: 'radio',
+        name: 'bgmusic-selection',
+        value: link.url
+      });
+      if (link.url === bgMusicSelectedUrl) radio.checked = true;
       radio.addEventListener('change', async () => {
         bgMusicSelectedUrl = radio.value;
         await saveBgMusic();
       });
-    });
 
-    // Move handlers
-    bgMusicList.querySelectorAll('.video-item-btn.move').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const idx = parseInt(btn.dataset.index);
-        const dir = btn.dataset.dir;
-        if (dir === 'up' && idx > 0) {
-          [allBgMusicLinks[idx], allBgMusicLinks[idx - 1]] = [allBgMusicLinks[idx - 1], allBgMusicLinks[idx]];
-        } else if (dir === 'down' && idx < allBgMusicLinks.length - 1) {
-          [allBgMusicLinks[idx], allBgMusicLinks[idx + 1]] = [allBgMusicLinks[idx + 1], allBgMusicLinks[idx]];
+      const upBtn = _el('button', {
+        class: 'video-item-btn move',
+        dataset: { dir: 'up', index },
+        disabled: index === 0 ? true : null
+      }, '↑');
+      upBtn.addEventListener('click', async () => {
+        if (index > 0) {
+          [allBgMusicLinks[index], allBgMusicLinks[index - 1]] = [allBgMusicLinks[index - 1], allBgMusicLinks[index]];
+          await saveBgMusic();
+          renderBgMusic();
         }
-        await saveBgMusic();
-        renderBgMusic();
       });
-    });
 
-    // Delete handlers
-    bgMusicList.querySelectorAll('.video-item-btn.remove').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const idx = parseInt(btn.dataset.index);
-        const removedUrl = allBgMusicLinks[idx].url;
-        allBgMusicLinks.splice(idx, 1);
+      const downBtn = _el('button', {
+        class: 'video-item-btn move',
+        dataset: { dir: 'down', index },
+        disabled: index === allBgMusicLinks.length - 1 ? true : null
+      }, '↓');
+      downBtn.addEventListener('click', async () => {
+        if (index < allBgMusicLinks.length - 1) {
+          [allBgMusicLinks[index], allBgMusicLinks[index + 1]] = [allBgMusicLinks[index + 1], allBgMusicLinks[index]];
+          await saveBgMusic();
+          renderBgMusic();
+        }
+      });
+
+      const removeBtn = _el('button', { class: 'video-item-btn remove', dataset: { index } }, 'Delete');
+      removeBtn.addEventListener('click', async () => {
+        const removedUrl = allBgMusicLinks[index].url;
+        allBgMusicLinks.splice(index, 1);
         if (bgMusicSelectedUrl === removedUrl) {
           bgMusicSelectedUrl = allBgMusicLinks.length > 0 ? allBgMusicLinks[0].url : null;
         }
         await saveBgMusic();
         renderBgMusic();
       });
-    });
+
+      return _el('div', { class: 'bgmusic-item', dataset: { index } },
+        _el('label', { class: 'bgmusic-radio-label' }, radio),
+        _el('div', { class: 'bgmusic-item-info' },
+          _el('div', { class: 'bgmusic-item-name' }, link.name),
+          _el('div', { class: 'bgmusic-item-url' },
+            _el('a', { href: link.url, target: '_blank' }, link.url)
+          )
+        ),
+        _el('div', { class: 'bgmusic-item-actions' }, upBtn, downBtn, removeBtn)
+      );
+    }));
   }
 
   async function addBgMusicLink(name, url) {
@@ -1371,7 +1430,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     liveGeneratedCount.textContent = `${packPlaylists.length} live generated playlist${packPlaylists.length !== 1 ? 's' : ''}`;
 
     if (packPlaylists.length === 0) {
-      liveGeneratedPlaylistList.innerHTML = '<p class="empty-state">No live generated playlists yet.</p>';
+      liveGeneratedPlaylistList.replaceChildren(_el('p', { class: 'empty-state' }, 'No live generated playlists yet.'));
       return;
     }
 
@@ -1380,31 +1439,22 @@ document.addEventListener('DOMContentLoaded', async () => {
       originalIndex: allLiveGeneratedPlaylists.indexOf(playlist)
     }));
 
-    liveGeneratedPlaylistList.innerHTML = playlistsWithIndex.map(({ playlist, originalIndex }) => `
-      <div class="playlist-card live-generated-card" data-index="${originalIndex}">
-        <div class="playlist-info">
-          <h4>${escapeHtml(playlist.name)}</h4>
-          <span class="playlist-meta filter-summary">${escapeHtml(formatFilterSummary(playlist.filters))}</span>
-        </div>
-        <div class="playlist-actions">
-          <button class="btn btn-success play-live-generated-btn" data-index="${originalIndex}">Play</button>
-          <button class="btn btn-secondary shuffle-live-generated-btn" data-index="${originalIndex}">Shuffle</button>
-          <button class="btn btn-primary edit-live-generated-btn" data-index="${originalIndex}">Edit</button>
-        </div>
-      </div>
-    `).join('');
+    liveGeneratedPlaylistList.replaceChildren(...playlistsWithIndex.map(({ playlist, originalIndex }) => {
+      const playBtn = _el('button', { class: 'btn btn-success play-live-generated-btn', dataset: { index: originalIndex } }, 'Play');
+      playBtn.addEventListener('click', () => playLiveGeneratedPlaylist(originalIndex));
+      const shuffleBtn = _el('button', { class: 'btn btn-secondary shuffle-live-generated-btn', dataset: { index: originalIndex } }, 'Shuffle');
+      shuffleBtn.addEventListener('click', () => playLiveGeneratedPlaylistShuffled(originalIndex));
+      const editBtn = _el('button', { class: 'btn btn-primary edit-live-generated-btn', dataset: { index: originalIndex } }, 'Edit');
+      editBtn.addEventListener('click', () => openLiveGeneratedModal(originalIndex));
 
-    liveGeneratedPlaylistList.querySelectorAll('.edit-live-generated-btn').forEach(btn => {
-      btn.addEventListener('click', () => openLiveGeneratedModal(parseInt(btn.dataset.index)));
-    });
-
-    liveGeneratedPlaylistList.querySelectorAll('.play-live-generated-btn').forEach(btn => {
-      btn.addEventListener('click', () => playLiveGeneratedPlaylist(parseInt(btn.dataset.index)));
-    });
-
-    liveGeneratedPlaylistList.querySelectorAll('.shuffle-live-generated-btn').forEach(btn => {
-      btn.addEventListener('click', () => playLiveGeneratedPlaylistShuffled(parseInt(btn.dataset.index)));
-    });
+      return _el('div', { class: 'playlist-card live-generated-card', dataset: { index: originalIndex } },
+        _el('div', { class: 'playlist-info' },
+          _el('h4', null, playlist.name),
+          _el('span', { class: 'playlist-meta filter-summary' }, formatFilterSummary(playlist.filters))
+        ),
+        _el('div', { class: 'playlist-actions' }, playBtn, shuffleBtn, editBtn)
+      );
+    }));
   }
 
   async function createLiveGeneratedPlaylist(name, filters) {
@@ -1500,17 +1550,23 @@ document.addEventListener('DOMContentLoaded', async () => {
   function updateLiveGeneratedTagFilters() {
     const sortedTags = getAllTagsForLiveGeneratedModal();
 
-    liveGeneratedIncludeTags.innerHTML = sortedTags.map(tag => `
-      <button class="filter-tag-chip ${liveGeneratedSelectedIncludeTags.has(tag) ? 'active' : ''}" data-tag="${tag}">
-        ${tag}
-      </button>
-    `).join('') || '<span class="empty-text">No tags available</span>';
+    if (sortedTags.length === 0) {
+      liveGeneratedIncludeTags.replaceChildren(_el('span', { class: 'empty-text' }, 'No tags available'));
+    } else {
+      liveGeneratedIncludeTags.replaceChildren(...sortedTags.map(tag => _el('button', {
+        class: `filter-tag-chip ${liveGeneratedSelectedIncludeTags.has(tag) ? 'active' : ''}`,
+        dataset: { tag }
+      }, tag)));
+    }
 
-    liveGeneratedExcludeTags.innerHTML = sortedTags.map(tag => `
-      <button class="filter-tag-chip exclude ${liveGeneratedSelectedExcludeTags.has(tag) ? 'active' : ''}" data-tag="${tag}">
-        ${tag}
-      </button>
-    `).join('') || '<span class="empty-text">No tags available</span>';
+    if (sortedTags.length === 0) {
+      liveGeneratedExcludeTags.replaceChildren(_el('span', { class: 'empty-text' }, 'No tags available'));
+    } else {
+      liveGeneratedExcludeTags.replaceChildren(...sortedTags.map(tag => _el('button', {
+        class: `filter-tag-chip exclude ${liveGeneratedSelectedExcludeTags.has(tag) ? 'active' : ''}`,
+        dataset: { tag }
+      }, tag)));
+    }
 
     // Add click handlers for include tags
     liveGeneratedIncludeTags.querySelectorAll('.filter-tag-chip').forEach(chip => {
@@ -1748,7 +1804,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       renderSearchResults(matchingBookmarks, term);
     } catch (error) {
       console.error('Error searching bookmarks:', error);
-      bookmarksList.innerHTML = '<p class="empty-state">Error searching bookmarks. Please try again.</p>';
+      bookmarksList.replaceChildren(_el('p', { class: 'empty-state' }, 'Error searching bookmarks. Please try again.'));
+    }
+  }
+
+  // Build a favicon node: <img> with fallback to '🔗' on error, or '🔗' if URL parsing fails.
+  function makeFaviconNode(itemUrl) {
+    try {
+      const urlObj = new URL(itemUrl);
+      const faviconUrl = `https://www.google.com/s2/favicons?domain=${urlObj.hostname}&sz=16`;
+      const img = _el('img', { src: faviconUrl });
+      img.addEventListener('error', () => {
+        img.style.display = 'none';
+        if (img.parentNode) img.parentNode.replaceChildren('🔗');
+      });
+      return img;
+    } catch {
+      return document.createTextNode('🔗');
     }
   }
 
@@ -1776,9 +1848,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (filteredBookmarks.length === 0) {
       if (isFiltering && bookmarks.length > 0) {
-        bookmarksList.innerHTML = `<p class="empty-state">No bookmarks matching "${escapeHtml(searchTerm)}" match the current filters.</p>`;
+        bookmarksList.replaceChildren(_el('p', { class: 'empty-state' }, `No bookmarks matching "${searchTerm}" match the current filters.`));
       } else {
-        bookmarksList.innerHTML = `<p class="empty-state">No bookmarks found matching "${escapeHtml(searchTerm)}"</p>`;
+        bookmarksList.replaceChildren(_el('p', { class: 'empty-state' }, `No bookmarks found matching "${searchTerm}"`));
       }
       return;
     }
@@ -1786,55 +1858,59 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Bookmarks are already sorted by filterAndSortBookmarks
     const sortedBookmarks = filteredBookmarks;
 
-    bookmarksList.innerHTML = sortedBookmarks.map(item => {
+    bookmarksList.replaceChildren(...sortedBookmarks.map(item => {
       const tagged = isUrlTagged(item.url);
       const taggedClass = tagged ? 'tagged' : '';
       const tagBadge = tagged
-        ? `<span class="bookmark-tag-badge">Tagged <span class="tag-count">${tagged.tags.length}</span></span>`
-        : '';
+        ? _el('span', { class: 'bookmark-tag-badge' }, 'Tagged ', _el('span', { class: 'tag-count' }, String(tagged.tags.length)))
+        : null;
 
       // Highlight matching tags
-      let tagsList = '';
+      let tagsListNode = null;
       if (tagged) {
         const matchingTags = tagged.tags.filter(tag =>
           tag.name.toLowerCase().includes(searchTerm.toLowerCase())
         );
         if (matchingTags.length > 0) {
-          tagsList = `<span class="bookmark-matching-tags">${matchingTags.map(t => t.name).join(', ')}</span>`;
+          tagsListNode = _el('span', { class: 'bookmark-matching-tags' }, matchingTags.map(t => t.name).join(', '));
         }
       }
 
-      // Get favicon URL
-      let faviconHtml;
-      try {
-        const urlObj = new URL(item.url);
-        const faviconUrl = `https://www.google.com/s2/favicons?domain=${urlObj.hostname}&sz=16`;
-        faviconHtml = `<img src="${faviconUrl}" onerror="this.style.display='none'; this.parentNode.innerHTML='🔗';">`;
-      } catch {
-        faviconHtml = '🔗';
+      const titleText = item.title || item.url;
+      const infoChildren = [
+        _el('div', { class: 'bookmark-title' }, titleText),
+        _el('div', { class: 'bookmark-url' },
+          _el('a', { href: item.url, target: '_blank' }, item.url)
+        )
+      ];
+      if (tagged) {
+        infoChildren.push(_el('div', { class: 'bookmark-meta' }, tagBadge, tagsListNode));
       }
 
-      return `
-        <div class="bookmark-item ${taggedClass}" data-url="${escapeHtml(item.url)}">
-          <div class="bookmark-icon">
-            ${faviconHtml}
-          </div>
-          <div class="bookmark-info">
-            <div class="bookmark-title">${escapeHtml(item.title) || escapeHtml(item.url)}</div>
-            <div class="bookmark-url"><a href="${escapeHtml(item.url)}" target="_blank">${escapeHtml(item.url)}</a></div>
-            ${tagged ? `<div class="bookmark-meta">${tagBadge}${tagsList}</div>` : ''}
-          </div>
-          <div class="bookmark-actions">
-            ${tagged
-              ? `<button class="btn btn-primary bookmark-edit-btn" data-id="${tagged.id}">Edit Tags</button>`
-              : `<button class="btn btn-secondary bookmark-add-btn" data-url="${escapeHtml(item.url)}" data-title="${escapeHtml(item.title || item.url)}">Add Tags</button>`
-            }
-            <button class="btn btn-secondary bookmark-playlist-btn" data-url="${escapeHtml(item.url)}" data-title="${escapeHtml(item.title || item.url)}">Add to playlist...</button>
-            <button class="btn btn-secondary bookmark-open-btn" data-url="${escapeHtml(item.url)}">Open</button>
-          </div>
-        </div>
-      `;
-    }).join('');
+      let actionBtn;
+      if (tagged) {
+        actionBtn = _el('button', { class: 'btn btn-primary bookmark-edit-btn', dataset: { id: tagged.id } }, 'Edit Tags');
+      } else {
+        actionBtn = _el('button', {
+          class: 'btn btn-secondary bookmark-add-btn',
+          dataset: { url: item.url, title: item.title || item.url }
+        }, 'Add Tags');
+      }
+      const playlistBtn = _el('button', {
+        class: 'btn btn-secondary bookmark-playlist-btn',
+        dataset: { url: item.url, title: item.title || item.url }
+      }, 'Add to playlist...');
+      const openBtn = _el('button', {
+        class: 'btn btn-secondary bookmark-open-btn',
+        dataset: { url: item.url }
+      }, 'Open');
+
+      return _el('div', { class: `bookmark-item ${taggedClass}`.trim(), dataset: { url: item.url } },
+        _el('div', { class: 'bookmark-icon' }, makeFaviconNode(item.url)),
+        _el('div', { class: 'bookmark-info' }, infoChildren),
+        _el('div', { class: 'bookmark-actions' }, actionBtn, playlistBtn, openBtn)
+      );
+    }));
 
     // Add event listeners
     addBookmarkEventListeners();
@@ -1907,29 +1983,32 @@ document.addEventListener('DOMContentLoaded', async () => {
       updateBreadcrumb();
     } catch (error) {
       console.error('Error loading bookmarks:', error);
-      bookmarksList.innerHTML = '<p class="empty-state">Error loading bookmarks. Please try again.</p>';
+      bookmarksList.replaceChildren(_el('p', { class: 'empty-state' }, 'Error loading bookmarks. Please try again.'));
     }
   }
 
   function updateBreadcrumb() {
-    bookmarksBreadcrumb.innerHTML = folderPath.map((folder, index) => {
+    const nodes = [];
+    folderPath.forEach((folder, index) => {
       const isLast = index === folderPath.length - 1;
-      const separator = index > 0 ? '<span class="breadcrumb-separator">›</span>' : '';
+      if (index > 0) {
+        nodes.push(_el('span', { class: 'breadcrumb-separator' }, '›'));
+      }
       const className = isLast ? 'breadcrumb-item current' : 'breadcrumb-item';
-      return `${separator}<span class="${className}" data-id="${folder.id}">${folder.title}</span>`;
-    }).join('');
-
-    // Add click handlers to breadcrumb items (except the last one)
-    bookmarksBreadcrumb.querySelectorAll('.breadcrumb-item:not(.current)').forEach(item => {
-      item.addEventListener('click', () => {
-        const targetId = item.dataset.id;
-        const targetIndex = folderPath.findIndex(f => f.id === targetId);
-        if (targetIndex >= 0) {
-          folderPath = folderPath.slice(0, targetIndex + 1);
-          navigateToFolder(targetId);
-        }
-      });
+      const item = _el('span', { class: className, dataset: { id: folder.id } }, folder.title);
+      if (!isLast) {
+        item.addEventListener('click', () => {
+          const targetId = folder.id;
+          const targetIndex = folderPath.findIndex(f => f.id === targetId);
+          if (targetIndex >= 0) {
+            folderPath = folderPath.slice(0, targetIndex + 1);
+            navigateToFolder(targetId);
+          }
+        });
+      }
+      nodes.push(item);
     });
+    bookmarksBreadcrumb.replaceChildren(...nodes);
   }
 
   function isUrlTagged(url) {
@@ -2075,9 +2154,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (folders.length === 0 && filteredBookmarks.length === 0) {
       if (isFiltering && bookmarks.length > 0) {
-        bookmarksList.innerHTML = '<p class="empty-state">No bookmarks match the current filters.</p>';
+        bookmarksList.replaceChildren(_el('p', { class: 'empty-state' }, 'No bookmarks match the current filters.'));
       } else {
-        bookmarksList.innerHTML = '<p class="empty-state">This folder is empty.</p>';
+        bookmarksList.replaceChildren(_el('p', { class: 'empty-state' }, 'This folder is empty.'));
       }
       return;
     }
@@ -2088,7 +2167,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       ...filteredBookmarks
     ];
 
-    bookmarksList.innerHTML = sortedItems.map(item => {
+    bookmarksList.replaceChildren(...sortedItems.map(item => {
       if (!item.url) {
         // Folder
         const counts = countChildren(item);
@@ -2096,58 +2175,64 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (counts.folders > 0) countText.push(`${counts.folders} folder${counts.folders !== 1 ? 's' : ''}`);
         if (counts.bookmarks > 0) countText.push(`${counts.bookmarks} item${counts.bookmarks !== 1 ? 's' : ''}`);
 
-        return `
-          <div class="bookmark-item folder" data-id="${item.id}" data-title="${escapeHtml(item.title)}">
-            <div class="bookmark-icon folder-icon">📁</div>
-            <div class="bookmark-info">
-              <div class="bookmark-title">${escapeHtml(item.title) || '(Untitled)'}</div>
-              ${countText.length > 0 ? `<span class="folder-children-count">${countText.join(', ')}</span>` : ''}
-            </div>
-            <div class="bookmark-actions">
-              <span class="folder-children-count">Open folder →</span>
-            </div>
-          </div>
-        `;
+        const infoChildren = [
+          _el('div', { class: 'bookmark-title' }, item.title || '(Untitled)')
+        ];
+        if (countText.length > 0) {
+          infoChildren.push(_el('span', { class: 'folder-children-count' }, countText.join(', ')));
+        }
+
+        return _el('div', { class: 'bookmark-item folder', dataset: { id: item.id, title: item.title } },
+          _el('div', { class: 'bookmark-icon folder-icon' }, '📁'),
+          _el('div', { class: 'bookmark-info' }, infoChildren),
+          _el('div', { class: 'bookmark-actions' },
+            _el('span', { class: 'folder-children-count' }, 'Open folder →')
+          )
+        );
       } else {
         // Bookmark
         const tagged = isUrlTagged(item.url);
         const taggedClass = tagged ? 'tagged' : '';
         const tagBadge = tagged
-          ? `<span class="bookmark-tag-badge">Tagged <span class="tag-count">${tagged.tags.length}</span></span>`
-          : '';
+          ? _el('span', { class: 'bookmark-tag-badge' }, 'Tagged ', _el('span', { class: 'tag-count' }, String(tagged.tags.length)))
+          : null;
 
-        // Get favicon URL using Google's favicon service as fallback
-        let faviconHtml;
-        try {
-          const urlObj = new URL(item.url);
-          const faviconUrl = `https://www.google.com/s2/favicons?domain=${urlObj.hostname}&sz=16`;
-          faviconHtml = `<img src="${faviconUrl}" onerror="this.style.display='none'; this.parentNode.innerHTML='🔗';">`;
-        } catch {
-          faviconHtml = '🔗';
+        const titleText = item.title || item.url;
+        const infoChildren = [
+          _el('div', { class: 'bookmark-title' }, titleText),
+          _el('div', { class: 'bookmark-url' },
+            _el('a', { href: item.url, target: '_blank' }, item.url)
+          )
+        ];
+        if (tagged) {
+          infoChildren.push(_el('div', { class: 'bookmark-meta' }, tagBadge));
         }
 
-        return `
-          <div class="bookmark-item ${taggedClass}" data-url="${escapeHtml(item.url)}">
-            <div class="bookmark-icon">
-              ${faviconHtml}
-            </div>
-            <div class="bookmark-info">
-              <div class="bookmark-title">${escapeHtml(item.title) || escapeHtml(item.url)}</div>
-              <div class="bookmark-url"><a href="${escapeHtml(item.url)}" target="_blank">${escapeHtml(item.url)}</a></div>
-              ${tagged ? `<div class="bookmark-meta">${tagBadge}</div>` : ''}
-            </div>
-            <div class="bookmark-actions">
-              ${tagged
-                ? `<button class="btn btn-primary bookmark-edit-btn" data-id="${tagged.id}">Edit Tags</button>`
-                : `<button class="btn btn-secondary bookmark-add-btn" data-url="${escapeHtml(item.url)}" data-title="${escapeHtml(item.title || item.url)}">Add Tags</button>`
-              }
-              <button class="btn btn-secondary bookmark-playlist-btn" data-url="${escapeHtml(item.url)}" data-title="${escapeHtml(item.title || item.url)}">Add to playlist...</button>
-              <button class="btn btn-secondary bookmark-open-btn" data-url="${escapeHtml(item.url)}">Open</button>
-            </div>
-          </div>
-        `;
+        let actionBtn;
+        if (tagged) {
+          actionBtn = _el('button', { class: 'btn btn-primary bookmark-edit-btn', dataset: { id: tagged.id } }, 'Edit Tags');
+        } else {
+          actionBtn = _el('button', {
+            class: 'btn btn-secondary bookmark-add-btn',
+            dataset: { url: item.url, title: item.title || item.url }
+          }, 'Add Tags');
+        }
+        const playlistBtn = _el('button', {
+          class: 'btn btn-secondary bookmark-playlist-btn',
+          dataset: { url: item.url, title: item.title || item.url }
+        }, 'Add to playlist...');
+        const openBtn = _el('button', {
+          class: 'btn btn-secondary bookmark-open-btn',
+          dataset: { url: item.url }
+        }, 'Open');
+
+        return _el('div', { class: `bookmark-item ${taggedClass}`.trim(), dataset: { url: item.url } },
+          _el('div', { class: 'bookmark-icon' }, makeFaviconNode(item.url)),
+          _el('div', { class: 'bookmark-info' }, infoChildren),
+          _el('div', { class: 'bookmark-actions' }, actionBtn, playlistBtn, openBtn)
+        );
       }
-    }).join('');
+    }));
 
     // Add folder click listeners
     bookmarksList.querySelectorAll('.bookmark-item.folder').forEach(folder => {
@@ -2200,7 +2285,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const packPlaylists = allPlaylistsData.filter(p => itemBelongsToPack(p, currentPack));
 
     if (packPlaylists.length === 0) {
-      addToPlaylistList.innerHTML = '<p class="empty-text" style="padding: 16px; text-align: center;">No existing playlists in current pack</p>';
+      addToPlaylistList.replaceChildren(_el('p', {
+        class: 'empty-text padded-centered',
+      }, 'No existing playlists in current pack'));
     } else {
       // Map to include original index in allPlaylistsData
       const playlistsWithIndex = packPlaylists.map(playlist => ({
@@ -2208,23 +2295,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         originalIndex: allPlaylistsData.indexOf(playlist)
       }));
 
-      addToPlaylistList.innerHTML = playlistsWithIndex.map(({ playlist, originalIndex }) => `
-        <div class="playlist-select-item" data-index="${originalIndex}">
-          <div>
-            <div class="playlist-name">${escapeHtml(playlist.name)}</div>
-            <div class="playlist-video-count">${playlist.videos.length} video${playlist.videos.length !== 1 ? 's' : ''}</div>
-          </div>
-          <span class="add-icon">+</span>
-        </div>
-      `).join('');
-
-      // Add click handlers
-      addToPlaylistList.querySelectorAll('.playlist-select-item').forEach(item => {
+      addToPlaylistList.replaceChildren(...playlistsWithIndex.map(({ playlist, originalIndex }) => {
+        const item = _el('div', { class: 'playlist-select-item', dataset: { index: originalIndex } },
+          _el('div', null,
+            _el('div', { class: 'playlist-name' }, playlist.name),
+            _el('div', { class: 'playlist-video-count' }, `${playlist.videos.length} video${playlist.videos.length !== 1 ? 's' : ''}`)
+          ),
+          _el('span', { class: 'add-icon' }, '+')
+        );
         item.addEventListener('click', async () => {
-          const index = parseInt(item.dataset.index);
-          await addItemsToPlaylist(index);
+          await addItemsToPlaylist(originalIndex);
         });
-      });
+        return item;
+      }));
     }
 
     addToPlaylistModal.classList.remove('hidden');
@@ -2378,14 +2461,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       ? visiblePacks
       : [currentPack, ...visiblePacks];
 
-    currentPackSelect.innerHTML = packsToShow.map(pack => {
+    currentPackSelect.replaceChildren(...packsToShow.map(pack => {
       const isHidden = hiddenPacks.includes(pack);
-      return `
-        <option value="${escapeHtml(pack)}" ${pack === currentPack ? 'selected' : ''}>
-          ${escapeHtml(pack)}${isHidden ? ' (hidden)' : ''}
-        </option>
-      `;
-    }).join('');
+      const opt = _el('option', { value: pack }, `${pack}${isHidden ? ' (hidden)' : ''}`);
+      if (pack === currentPack) opt.selected = true;
+      return opt;
+    }));
   }
 
   function updateHiddenPacksUI() {
@@ -2439,50 +2520,47 @@ document.addEventListener('DOMContentLoaded', async () => {
       packPlaylistCounts[pack] = await countPlaylistsInPack(pack);
     }
 
-    packsList.innerHTML = packsToRender.map(pack => {
+    packsList.replaceChildren(...packsToRender.map(pack => {
       const isActive = pack === currentPack;
       const isDefault = pack === 'default';
       const isHidden = hiddenPacks.includes(pack);
       const videoCount = packVideoCounts[pack] || 0;
       const playlistCount = packPlaylistCounts[pack] || 0;
 
-      return `
-        <div class="pack-card ${isActive ? 'active' : ''} ${isDefault ? 'default-pack' : ''} ${isHidden ? 'hidden-pack' : ''}" data-pack="${escapeHtml(pack)}">
-          <div class="pack-info">
-            <div class="pack-name">
-              ${escapeHtml(pack)}
-              ${isActive ? '<span class="pack-badge active-badge">Active</span>' : ''}
-              ${isDefault ? '<span class="pack-badge default-badge">Default</span>' : ''}
-            </div>
-            <div class="pack-meta">${videoCount} video${videoCount !== 1 ? 's' : ''}, ${playlistCount} playlist${playlistCount !== 1 ? 's' : ''}</div>
-          </div>
-          <div class="pack-actions">
-            ${!isActive ? `<button class="btn btn-primary select-pack-btn" data-pack="${escapeHtml(pack)}">Select</button>` : ''}
-            ${!isDefault ? `<button class="btn btn-secondary rename-pack-btn" data-pack="${escapeHtml(pack)}">Rename</button>` : ''}
-            ${!isDefault && !isActive ? `<button class="btn btn-danger delete-pack-btn" data-pack="${escapeHtml(pack)}">Delete</button>` : ''}
-          </div>
-        </div>
-      `;
-    }).join('');
+      const cardClasses = ['pack-card'];
+      if (isActive) cardClasses.push('active');
+      if (isDefault) cardClasses.push('default-pack');
+      if (isHidden) cardClasses.push('hidden-pack');
 
-    // Add event listeners for pack actions
-    packsList.querySelectorAll('.select-pack-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        await selectPack(btn.dataset.pack);
-      });
-    });
+      const nameChildren = [pack];
+      if (isActive) nameChildren.push(' ', _el('span', { class: 'pack-badge active-badge' }, 'Active'));
+      if (isDefault) nameChildren.push(' ', _el('span', { class: 'pack-badge default-badge' }, 'Default'));
 
-    packsList.querySelectorAll('.rename-pack-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        await renamePack(btn.dataset.pack);
-      });
-    });
+      const actionButtons = [];
+      if (!isActive) {
+        const selectBtn = _el('button', { class: 'btn btn-primary select-pack-btn', dataset: { pack } }, 'Select');
+        selectBtn.addEventListener('click', async () => { await selectPack(pack); });
+        actionButtons.push(selectBtn);
+      }
+      if (!isDefault) {
+        const renameBtn = _el('button', { class: 'btn btn-secondary rename-pack-btn', dataset: { pack } }, 'Rename');
+        renameBtn.addEventListener('click', async () => { await renamePack(pack); });
+        actionButtons.push(renameBtn);
+      }
+      if (!isDefault && !isActive) {
+        const deleteBtn = _el('button', { class: 'btn btn-danger delete-pack-btn', dataset: { pack } }, 'Delete');
+        deleteBtn.addEventListener('click', async () => { await deletePack(pack); });
+        actionButtons.push(deleteBtn);
+      }
 
-    packsList.querySelectorAll('.delete-pack-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        await deletePack(btn.dataset.pack);
-      });
-    });
+      return _el('div', { class: cardClasses.join(' '), dataset: { pack } },
+        _el('div', { class: 'pack-info' },
+          _el('div', { class: 'pack-name' }, nameChildren),
+          _el('div', { class: 'pack-meta' }, `${videoCount} video${videoCount !== 1 ? 's' : ''}, ${playlistCount} playlist${playlistCount !== 1 ? 's' : ''}`)
+        ),
+        _el('div', { class: 'pack-actions' }, actionButtons)
+      );
+    }));
   }
 
   async function selectPack(packName) {
@@ -2600,15 +2678,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     const visiblePacks = getVisiblePacks();
     const otherPacks = visiblePacks.filter(p => p !== currentPack);
 
-    migrateTargetPack.innerHTML = `
-      <option value="">Select target pack...</option>
-      ${otherPacks.map(pack => {
-        const isHidden = hiddenPacks.includes(pack);
-        return `
-          <option value="${escapeHtml(pack)}">${escapeHtml(pack)}${isHidden ? ' (hidden)' : ''}</option>
-        `;
-      }).join('')}
-    `;
+    const opts = [_el('option', { value: '' }, 'Select target pack...')];
+    otherPacks.forEach(pack => {
+      const isHidden = hiddenPacks.includes(pack);
+      opts.push(_el('option', { value: pack }, `${pack}${isHidden ? ' (hidden)' : ''}`));
+    });
+    migrateTargetPack.replaceChildren(...opts);
 
     // Disable buttons when no selection
     migrateMoveBtn.disabled = true;
@@ -3197,7 +3272,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         rokuPhoneUrl.textContent = resp.url;
         rokuPhoneUrl.title = resp.url;
         if (resp.svg) {
-          rokuPhoneQr.innerHTML = resp.svg;
+          const parser = new DOMParser();
+          const svgDoc = parser.parseFromString(resp.svg, 'image/svg+xml');
+          rokuPhoneQr.replaceChildren(svgDoc.documentElement);
         } else {
           rokuPhoneQr.textContent = '(install `qrcode` in the customcuts env to see a QR here)';
         }
