@@ -2542,6 +2542,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         selectBtn.addEventListener('click', async () => { await selectPack(pack); });
         actionButtons.push(selectBtn);
       }
+      const exportBtn = _el('button', { class: 'btn btn-secondary export-pack-btn', dataset: { pack } }, 'Export...');
+      exportBtn.addEventListener('click', async () => { await exportPackAsZip(pack); });
+      actionButtons.push(exportBtn);
       if (!isDefault) {
         const renameBtn = _el('button', { class: 'btn btn-secondary rename-pack-btn', dataset: { pack } }, 'Rename');
         renameBtn.addEventListener('click', async () => { await renamePack(pack); });
@@ -2865,6 +2868,856 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadPacks();
     await loadAllVideos();
   }
+
+  // ==================== PACK IMPORT / EXPORT ====================
+  //
+  // Threat model: a pack zip may come from an untrusted source. The reader
+  // must therefore:
+  //   - Use only JSON.parse (no eval / Function / dynamic code paths).
+  //   - Reject zips above a size cap, with too many entries, or with path
+  //     traversal / absolute paths.
+  //   - Validate every imported field against a strict whitelist with type
+  //     and length checks; silently drop unknown fields.
+  //   - Never inject imported text into innerHTML; route all imported
+  //     strings through `escapeHtml` (already used by render code).
+  //   - Skip dangerous property names (__proto__, constructor, prototype)
+  //     when building objects from imported data.
+  //   - Never overwrite existing storage entries: imported videos that
+  //     collide on URL only get their `packs` list extended.
+
+  const PACK_FORMAT = 'customcuts-pack';
+  const PACK_FORMAT_VERSION = 1;
+  const MAX_ZIP_BYTES = 64 * 1024 * 1024;       // 64 MB zip cap
+  const MAX_ENTRY_BYTES = 64 * 1024 * 1024;     // 64 MB per entry cap
+  const MAX_ZIP_ENTRIES = 32;                    // we only emit 2 files
+  const MAX_JSON_BYTES = 32 * 1024 * 1024;      // 32 MB JSON cap
+  const MAX_VIDEOS_PER_PACK = 100000;
+  const MAX_TAGS_PER_VIDEO = 1000;
+  const MAX_PLAYLIST_VIDEOS = 100000;
+  const MAX_PLAYLISTS_PER_PACK = 5000;
+  const PACK_NAME_RE = /^[A-Za-z0-9\s\-_]+$/;
+  const TAG_NAME_RE = /^[\x20-\x7e]{1,128}$/;
+  const PERSON_KEY_RE = /^P[1-4]$/;
+  const DANGEROUS_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+
+  // CRC-32 (IEEE 802.3 polynomial), table-driven.
+  const CRC32_TABLE = (() => {
+    const tbl = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) {
+        c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      tbl[i] = c >>> 0;
+    }
+    return tbl;
+  })();
+  function crc32(bytes) {
+    let c = 0xffffffff;
+    for (let i = 0; i < bytes.length; i++) {
+      c = CRC32_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+    }
+    return (c ^ 0xffffffff) >>> 0;
+  }
+
+  // Build a ZIP archive containing the given entries using STORED method
+  // (no compression). Stored is always interoperable, easy to audit, and
+  // keeps the writer below ~80 lines. Compressed zips can still be read
+  // back because the reader handles DEFLATE via DecompressionStream.
+  function zipWrite(entries) {
+    const enc = new TextEncoder();
+    const localChunks = [];
+    const centralChunks = [];
+    let offset = 0;
+
+    for (const entry of entries) {
+      const nameBytes = enc.encode(entry.name);
+      const data = entry.data;
+      const crc = crc32(data);
+
+      // Local file header (30 bytes + name + data, no extras).
+      const lfh = new Uint8Array(30 + nameBytes.length);
+      const lv = new DataView(lfh.buffer);
+      lv.setUint32(0, 0x04034b50, true);   // signature
+      lv.setUint16(4, 20, true);            // version needed
+      lv.setUint16(6, 0x0800, true);        // flags: UTF-8 filename
+      lv.setUint16(8, 0, true);             // method: stored
+      lv.setUint16(10, 0, true);            // mod time
+      lv.setUint16(12, 0x0021, true);       // mod date (1980-01-01)
+      lv.setUint32(14, crc, true);          // CRC-32
+      lv.setUint32(18, data.length, true);  // compressed size
+      lv.setUint32(22, data.length, true);  // uncompressed size
+      lv.setUint16(26, nameBytes.length, true);
+      lv.setUint16(28, 0, true);            // extra field length
+      lfh.set(nameBytes, 30);
+      localChunks.push(lfh, data);
+
+      // Central directory entry (46 bytes + name).
+      const cd = new Uint8Array(46 + nameBytes.length);
+      const cv = new DataView(cd.buffer);
+      cv.setUint32(0, 0x02014b50, true);    // signature
+      cv.setUint16(4, 20, true);             // version made by
+      cv.setUint16(6, 20, true);             // version needed
+      cv.setUint16(8, 0x0800, true);         // flags
+      cv.setUint16(10, 0, true);             // method
+      cv.setUint16(12, 0, true);             // mod time
+      cv.setUint16(14, 0x0021, true);        // mod date
+      cv.setUint32(16, crc, true);
+      cv.setUint32(20, data.length, true);   // compressed size
+      cv.setUint32(24, data.length, true);   // uncompressed size
+      cv.setUint16(28, nameBytes.length, true);
+      cv.setUint16(30, 0, true);             // extra field length
+      cv.setUint16(32, 0, true);             // comment length
+      cv.setUint16(34, 0, true);             // disk number start
+      cv.setUint16(36, 0, true);             // internal attrs
+      cv.setUint32(38, 0, true);             // external attrs
+      cv.setUint32(42, offset, true);        // offset of LFH
+      cd.set(nameBytes, 46);
+      centralChunks.push(cd);
+
+      offset += lfh.length + data.length;
+    }
+
+    const cdStart = offset;
+    let cdSize = 0;
+    for (const c of centralChunks) cdSize += c.length;
+
+    const eocd = new Uint8Array(22);
+    const ev = new DataView(eocd.buffer);
+    ev.setUint32(0, 0x06054b50, true);
+    ev.setUint16(4, 0, true);                // disk number
+    ev.setUint16(6, 0, true);                // disk where CD starts
+    ev.setUint16(8, entries.length, true);   // entries on this disk
+    ev.setUint16(10, entries.length, true);  // total entries
+    ev.setUint32(12, cdSize, true);
+    ev.setUint32(16, cdStart, true);
+    ev.setUint16(20, 0, true);               // comment length
+
+    // Assemble.
+    let total = cdStart + cdSize + eocd.length;
+    const out = new Uint8Array(total);
+    let p = 0;
+    for (const c of localChunks) { out.set(c, p); p += c.length; }
+    for (const c of centralChunks) { out.set(c, p); p += c.length; }
+    out.set(eocd, p);
+    return out;
+  }
+
+  // Parse a ZIP archive. Returns a Map<filename, Uint8Array> of the entries
+  // we care about. Throws on malformed input. Strictly bounded so a hostile
+  // file can't cause runaway memory use.
+  async function zipRead(bytes, wantedNames) {
+    if (!(bytes instanceof Uint8Array)) {
+      throw new Error('zip: input must be Uint8Array');
+    }
+    if (bytes.length > MAX_ZIP_BYTES) {
+      throw new Error('zip: archive exceeds size limit');
+    }
+    if (bytes.length < 22) {
+      throw new Error('zip: archive too small to be valid');
+    }
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+    // Locate End Of Central Directory record. Search the last 65557 bytes
+    // (max comment length + EOCD size) for the EOCD signature.
+    const searchStart = Math.max(0, bytes.length - 65557);
+    let eocdPos = -1;
+    for (let i = bytes.length - 22; i >= searchStart; i--) {
+      if (view.getUint32(i, true) === 0x06054b50) {
+        eocdPos = i;
+        break;
+      }
+    }
+    if (eocdPos < 0) throw new Error('zip: end-of-central-directory not found');
+
+    const cdEntries = view.getUint16(eocdPos + 10, true);
+    const cdSize = view.getUint32(eocdPos + 12, true);
+    const cdOffset = view.getUint32(eocdPos + 16, true);
+
+    if (cdEntries > MAX_ZIP_ENTRIES) {
+      throw new Error(`zip: too many entries (${cdEntries})`);
+    }
+    if (cdOffset + cdSize > bytes.length) {
+      throw new Error('zip: central directory out of bounds');
+    }
+
+    const result = new Map();
+    const wanted = new Set(wantedNames);
+    const dec = new TextDecoder('utf-8', { fatal: false });
+
+    let p = cdOffset;
+    for (let i = 0; i < cdEntries; i++) {
+      if (p + 46 > bytes.length || view.getUint32(p, true) !== 0x02014b50) {
+        throw new Error('zip: malformed central directory entry');
+      }
+      const flags = view.getUint16(p + 8, true);
+      const method = view.getUint16(p + 10, true);
+      const crcExpected = view.getUint32(p + 16, true);
+      const compSize = view.getUint32(p + 20, true);
+      const uncompSize = view.getUint32(p + 24, true);
+      const nameLen = view.getUint16(p + 28, true);
+      const extraLen = view.getUint16(p + 30, true);
+      const commentLen = view.getUint16(p + 32, true);
+      const lfhOffset = view.getUint32(p + 42, true);
+      if (p + 46 + nameLen + extraLen + commentLen > bytes.length) {
+        throw new Error('zip: malformed central directory entry');
+      }
+      const nameBytes = bytes.subarray(p + 46, p + 46 + nameLen);
+      const name = dec.decode(nameBytes);
+      p += 46 + nameLen + extraLen + commentLen;
+
+      // Reject path traversal and absolute paths. We only accept flat
+      // filenames at the top level.
+      if (
+        name.length === 0 ||
+        name.includes('..') ||
+        name.startsWith('/') ||
+        name.startsWith('\\') ||
+        /^[A-Za-z]:/.test(name) ||
+        name.includes('\0')
+      ) {
+        throw new Error(`zip: rejected entry name "${name}"`);
+      }
+
+      if (!wanted.has(name)) continue; // Drop unexpected files silently.
+
+      if (uncompSize > MAX_ENTRY_BYTES || compSize > MAX_ENTRY_BYTES) {
+        throw new Error(`zip: entry "${name}" exceeds size limit`);
+      }
+      if (lfhOffset + 30 > bytes.length || view.getUint32(lfhOffset, true) !== 0x04034b50) {
+        throw new Error(`zip: malformed local header for "${name}"`);
+      }
+      const lfhNameLen = view.getUint16(lfhOffset + 26, true);
+      const lfhExtraLen = view.getUint16(lfhOffset + 28, true);
+      const dataStart = lfhOffset + 30 + lfhNameLen + lfhExtraLen;
+      if (dataStart + compSize > bytes.length) {
+        throw new Error(`zip: data out of bounds for "${name}"`);
+      }
+      const raw = bytes.subarray(dataStart, dataStart + compSize);
+
+      let plain;
+      if (method === 0) {
+        plain = raw;
+      } else if (method === 8) {
+        // DEFLATE via native DecompressionStream.
+        const stream = new Response(raw).body.pipeThrough(new DecompressionStream('deflate-raw'));
+        const buf = new Uint8Array(await new Response(stream).arrayBuffer());
+        if (buf.length > MAX_ENTRY_BYTES) {
+          throw new Error(`zip: decompressed entry "${name}" exceeds size limit`);
+        }
+        plain = buf;
+      } else {
+        throw new Error(`zip: unsupported compression method ${method} for "${name}"`);
+      }
+
+      if (plain.length !== uncompSize) {
+        throw new Error(`zip: size mismatch for "${name}"`);
+      }
+      if (crc32(plain) !== crcExpected) {
+        throw new Error(`zip: checksum mismatch for "${name}"`);
+      }
+      result.set(name, plain);
+      // Suppress unused warning for flags.
+      void flags;
+    }
+    return result;
+  }
+
+  // ---- Validation helpers ----
+
+  function safeStr(v, max) {
+    if (typeof v !== 'string') return null;
+    if (v.length === 0 || v.length > max) return null;
+    // Strip control chars except tab/newline; ban NULs.
+    if (/[\0]/.test(v)) return null;
+    return v;
+  }
+  function safeFiniteNumber(v) {
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  }
+  function safeUrl(v) {
+    if (typeof v !== 'string' || v.length === 0 || v.length > 4096) return null;
+    let u;
+    try { u = new URL(v); } catch { return null; }
+    // Permit only http/https/file. The extension's storage uses canonical
+    // web URLs; file:// is occasionally used for local-only entries.
+    if (!['http:', 'https:', 'file:'].includes(u.protocol)) return null;
+    return v;
+  }
+
+  function sanitizeTag(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const name = safeStr(raw.name, 128);
+    if (name == null || !TAG_NAME_RE.test(name)) return null;
+    const tag = { name };
+    const createdAt = safeFiniteNumber(raw.createdAt);
+    if (createdAt != null && createdAt >= 0 && createdAt < 1e15) tag.createdAt = createdAt;
+    const intensity = safeFiniteNumber(raw.intensity);
+    if (intensity != null && intensity >= 1 && intensity <= 10 && Number.isInteger(intensity)) {
+      tag.intensity = intensity;
+    }
+    const startTime = safeFiniteNumber(raw.startTime);
+    const endTime = safeFiniteNumber(raw.endTime);
+    if (startTime != null && endTime != null && startTime >= 0 && endTime >= startTime && endTime < 1e7) {
+      tag.startTime = startTime;
+      tag.endTime = endTime;
+    }
+    const popText = safeStr(raw.popText, 5000);
+    if (popText != null) tag.popText = popText;
+    const titleText = safeStr(raw.titleText, 1024);
+    if (titleText != null) tag.titleText = titleText;
+    return tag;
+  }
+
+  function sanitizeRatings(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+    const out = {};
+    for (const key of Object.keys(raw)) {
+      if (DANGEROUS_KEYS.has(key)) continue;
+      if (!PERSON_KEY_RE.test(key)) continue;
+      const v = raw[key];
+      if (typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 5) {
+        out[key] = v;
+      }
+    }
+    return out;
+  }
+
+  function sanitizeVideo(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const url = safeUrl(raw.url);
+    if (url == null) return null;
+    const rawTags = Array.isArray(raw.tags) ? raw.tags : [];
+    if (rawTags.length > MAX_TAGS_PER_VIDEO) return null;
+    const tags = [];
+    for (const t of rawTags) {
+      const clean = sanitizeTag(t);
+      if (clean) tags.push(clean);
+    }
+    if (tags.length === 0) return null; // Storage convention: a video_* entry
+                                        // only exists if it has real tags.
+    const out = { url, tags };
+    const title = safeStr(raw.title, 1024);
+    if (title != null) out.title = title;
+    const feedback = safeStr(raw.feedback, 10000);
+    if (feedback != null) out.feedback = feedback;
+    const duration = safeFiniteNumber(raw.duration);
+    // Cap at ~30 days to reject obvious garbage; videos are seconds.
+    if (duration != null && duration >= 0 && duration < 86400 * 30) {
+      out.duration = duration;
+    }
+    out.ratings = sanitizeRatings(raw.ratings);
+    return out;
+  }
+
+  function sanitizePlaylistVideoRef(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const url = safeUrl(raw.url);
+    if (url == null) return null;
+    const out = { url };
+    const title = safeStr(raw.title, 1024);
+    if (title != null) out.title = title;
+    return out;
+  }
+
+  function sanitizePlaylist(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const name = safeStr(raw.name, 100);
+    if (name == null) return null;
+    const rawVideos = Array.isArray(raw.videos) ? raw.videos : [];
+    if (rawVideos.length > MAX_PLAYLIST_VIDEOS) return null;
+    const videos = [];
+    for (const v of rawVideos) {
+      const clean = sanitizePlaylistVideoRef(v);
+      if (clean) videos.push(clean);
+    }
+    const createdAt = safeFiniteNumber(raw.createdAt);
+    const out = { name, videos };
+    if (createdAt != null && createdAt >= 0 && createdAt < 1e15) out.createdAt = createdAt;
+    return out;
+  }
+
+  function sanitizeFilters(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+    const out = {};
+    const searchTerm = safeStr(raw.searchTerm, 1024);
+    if (searchTerm != null) out.searchTerm = searchTerm;
+    const sanitizeTagList = (arr) => {
+      if (!Array.isArray(arr)) return null;
+      if (arr.length > 200) return null;
+      const result = [];
+      for (const t of arr) {
+        const clean = safeStr(t, 128);
+        if (clean != null && TAG_NAME_RE.test(clean)) result.push(clean);
+      }
+      return result;
+    };
+    const inc = sanitizeTagList(raw.includeTags);
+    if (inc) out.includeTags = inc;
+    const exc = sanitizeTagList(raw.excludeTags);
+    if (exc) out.excludeTags = exc;
+    if (raw.includeTagsMode === 'AND' || raw.includeTagsMode === 'OR') {
+      out.includeTagsMode = raw.includeTagsMode;
+    }
+    if (raw.tagLengthMode === 'any' || raw.tagLengthMode === 'longer') {
+      out.tagLengthMode = raw.tagLengthMode;
+    }
+    const tlMin = safeFiniteNumber(raw.tagLengthMin);
+    if (tlMin != null && tlMin >= 0 && tlMin < 1e7) out.tagLengthMin = tlMin;
+    if (typeof raw.ratingPerson === 'string' && (raw.ratingPerson === 'avg' || PERSON_KEY_RE.test(raw.ratingPerson))) {
+      out.ratingPerson = raw.ratingPerson;
+    }
+    if (typeof raw.minRating === 'string' && /^[0-5]?$/.test(raw.minRating)) {
+      out.minRating = raw.minRating;
+    }
+    const ALLOWED_VL = new Set(['', '15m', '30m', '45m', '1h']);
+    if (typeof raw.videoLength === 'string' && ALLOWED_VL.has(raw.videoLength)) {
+      out.videoLength = raw.videoLength;
+    }
+    const ALLOWED_SORT = new Set(['recent', 'rating', 'tags', 'least-tags', 'alpha', 'longest', 'shortest']);
+    if (typeof raw.sortBy === 'string' && ALLOWED_SORT.has(raw.sortBy)) {
+      out.sortBy = raw.sortBy;
+    }
+    return out;
+  }
+
+  function sanitizeLiveGeneratedPlaylist(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const name = safeStr(raw.name, 100);
+    if (name == null) return null;
+    const filters = sanitizeFilters(raw.filters);
+    const out = { name, filters };
+    const createdAt = safeFiniteNumber(raw.createdAt);
+    if (createdAt != null && createdAt >= 0 && createdAt < 1e15) out.createdAt = createdAt;
+    return out;
+  }
+
+  function sanitizePackPayload(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('Pack file is not an object.');
+    }
+    if (raw.format !== PACK_FORMAT) {
+      throw new Error('Pack file is missing the expected format marker.');
+    }
+    if (raw.version !== PACK_FORMAT_VERSION) {
+      throw new Error(`Unsupported pack version: ${raw.version}.`);
+    }
+    const packRaw = raw.pack;
+    if (!packRaw || typeof packRaw !== 'object' || Array.isArray(packRaw)) {
+      throw new Error('Pack payload is missing the "pack" object.');
+    }
+    const name = safeStr(packRaw.name, 50);
+    if (name == null || !PACK_NAME_RE.test(name)) {
+      throw new Error('Pack name is missing or contains disallowed characters.');
+    }
+
+    const rawVideos = Array.isArray(packRaw.videos) ? packRaw.videos : [];
+    if (rawVideos.length > MAX_VIDEOS_PER_PACK) {
+      throw new Error('Pack file exceeds the per-pack video limit.');
+    }
+    const videos = [];
+    for (const v of rawVideos) {
+      const clean = sanitizeVideo(v);
+      if (clean) videos.push(clean);
+    }
+
+    const rawPlaylists = Array.isArray(packRaw.playlists) ? packRaw.playlists : [];
+    if (rawPlaylists.length > MAX_PLAYLISTS_PER_PACK) {
+      throw new Error('Pack file exceeds the playlist limit.');
+    }
+    const playlists = [];
+    for (const p of rawPlaylists) {
+      const clean = sanitizePlaylist(p);
+      if (clean) playlists.push(clean);
+    }
+
+    const rawLgps = Array.isArray(packRaw.liveGeneratedPlaylists) ? packRaw.liveGeneratedPlaylists : [];
+    if (rawLgps.length > MAX_PLAYLISTS_PER_PACK) {
+      throw new Error('Pack file exceeds the live-generated-playlist limit.');
+    }
+    const liveGeneratedPlaylists = [];
+    for (const p of rawLgps) {
+      const clean = sanitizeLiveGeneratedPlaylist(p);
+      if (clean) liveGeneratedPlaylists.push(clean);
+    }
+
+    return { name, videos, playlists, liveGeneratedPlaylists };
+  }
+
+  // ---- Export ----
+
+  function buildPackPayloadForExport(packName) {
+    return chrome.storage.local.get(null).then(data => {
+      const videos = [];
+      for (const [key, value] of Object.entries(data)) {
+        if (!key.startsWith('video_')) continue;
+        if (!value || typeof value !== 'object') continue;
+        if (!value.tags || !value.tags.length) continue;
+        if (!itemBelongsToPack(value, packName)) continue;
+        const url = key.slice('video_'.length);
+        // Build a clean, machine-portable record. Drop `localPath`,
+        // `pack` (legacy single-name field), and anything else that
+        // doesn't round-trip.
+        const out = { url, tags: value.tags };
+        if (typeof value.title === 'string') out.title = value.title;
+        if (typeof value.feedback === 'string') out.feedback = value.feedback;
+        if (typeof value.duration === 'number') out.duration = value.duration;
+        if (value.ratings && typeof value.ratings === 'object') {
+          out.ratings = {};
+          for (const k of Object.keys(value.ratings)) {
+            if (PERSON_KEY_RE.test(k)) out.ratings[k] = value.ratings[k];
+          }
+        }
+        videos.push(out);
+      }
+
+      const playlists = (data.playlists || [])
+        .filter(p => itemBelongsToPack(p, packName))
+        .map(p => ({
+          name: p.name,
+          videos: Array.isArray(p.videos)
+            ? p.videos.map(v => {
+                const item = { url: v.url };
+                if (typeof v.title === 'string') item.title = v.title;
+                return item;
+              })
+            : [],
+          createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
+        }));
+
+      const lgps = (data.liveGeneratedPlaylists || [])
+        .filter(p => itemBelongsToPack(p, packName))
+        .map(p => ({
+          name: p.name,
+          filters: p.filters || {},
+          createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
+        }));
+
+      return {
+        format: PACK_FORMAT,
+        version: PACK_FORMAT_VERSION,
+        exportedAt: new Date().toISOString(),
+        pack: {
+          name: packName,
+          videos,
+          playlists,
+          liveGeneratedPlaylists: lgps,
+        },
+      };
+    });
+  }
+
+  async function exportPackAsZip(packName) {
+    if (!packName || typeof packName !== 'string') return;
+    if (!allPacks.includes(packName)) {
+      alert('Unknown pack: ' + packName);
+      return;
+    }
+    try {
+      const payload = await buildPackPayloadForExport(packName);
+      const enc = new TextEncoder();
+      const manifest = enc.encode(JSON.stringify({
+        format: PACK_FORMAT,
+        version: PACK_FORMAT_VERSION,
+        exportedAt: payload.exportedAt,
+        pack: packName,
+      }, null, 2));
+      const packJson = enc.encode(JSON.stringify(payload, null, 2));
+      const zip = zipWrite([
+        { name: 'manifest.json', data: manifest },
+        { name: 'pack.json', data: packJson },
+      ]);
+      const safeName = packName.replace(/[^A-Za-z0-9\-_]+/g, '_');
+      const stamp = new Date().toISOString().slice(0, 10);
+      const blob = new Blob([zip], { type: 'application/zip' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `customcuts-pack-${safeName}-${stamp}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Revoke after the browser has had a moment to start the download.
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+    } catch (e) {
+      console.error('exportPackAsZip failed:', e);
+      alert('Failed to export pack: ' + (e && e.message ? e.message : e));
+    }
+  }
+
+  // ---- Import ----
+
+  // Pending state for the import-pack modal. Set by handleImportFile() and
+  // consumed by the confirm handler.
+  let pendingImport = null;
+
+  const importPackBtn = document.getElementById('import-pack-btn');
+  const importPackFileInput = document.getElementById('import-pack-file');
+  const importPackModal = document.getElementById('import-pack-modal');
+  const closeImportPackModalBtn = document.getElementById('close-import-pack-modal');
+  const cancelImportPackBtn = document.getElementById('cancel-import-pack-btn');
+  const confirmImportPackBtn = document.getElementById('confirm-import-pack-btn');
+  const importPackSummary = document.getElementById('import-pack-summary');
+  const importPackNameInput = document.getElementById('import-pack-name-input');
+  const importPackConflict = document.getElementById('import-pack-conflict');
+  const importPackError = document.getElementById('import-pack-error');
+
+  function setImportError(msg) {
+    if (!msg) {
+      importPackError.textContent = '';
+      importPackError.classList.add('hidden');
+    } else {
+      importPackError.textContent = msg;
+      importPackError.classList.remove('hidden');
+    }
+  }
+
+  function updateImportConflictState() {
+    if (!pendingImport) return;
+    const desired = importPackNameInput.value.trim();
+    const mode = document.querySelector('input[name="import-pack-mode"]:checked')?.value || 'new';
+    const exists = allPacks.some(p => p.toLowerCase() === desired.toLowerCase());
+    let conflictMsg = '';
+    if (!desired) {
+      conflictMsg = 'Pack name is required.';
+    } else if (!PACK_NAME_RE.test(desired) || desired.length > 50) {
+      conflictMsg = 'Pack name contains disallowed characters or is too long.';
+    } else if (mode === 'new' && exists) {
+      conflictMsg = `A pack named "${desired}" already exists. Pick a different name or switch to "Merge".`;
+    } else if (mode === 'merge' && !exists) {
+      conflictMsg = `No pack named "${desired}" exists yet. Switch to "Create as a new pack".`;
+    }
+    if (conflictMsg) {
+      importPackConflict.textContent = conflictMsg;
+      importPackConflict.classList.remove('hidden');
+      confirmImportPackBtn.disabled = true;
+    } else {
+      importPackConflict.textContent = '';
+      importPackConflict.classList.add('hidden');
+      confirmImportPackBtn.disabled = false;
+    }
+  }
+
+  function suggestImportName(originalName) {
+    if (!allPacks.some(p => p.toLowerCase() === originalName.toLowerCase())) {
+      return originalName;
+    }
+    const base = `${originalName} (imported)`;
+    if (!allPacks.some(p => p.toLowerCase() === base.toLowerCase()) &&
+        PACK_NAME_RE.test(base) && base.length <= 50) {
+      return base;
+    }
+    for (let i = 1; i < 1000; i++) {
+      const candidate = `${originalName} (${i})`;
+      if (!allPacks.some(p => p.toLowerCase() === candidate.toLowerCase()) &&
+          PACK_NAME_RE.test(candidate) && candidate.length <= 50) {
+        return candidate;
+      }
+    }
+    return originalName;
+  }
+
+  function openImportPackModal(payload) {
+    pendingImport = payload;
+    const exists = allPacks.some(p => p.toLowerCase() === payload.name.toLowerCase());
+    importPackNameInput.value = exists ? suggestImportName(payload.name) : payload.name;
+    // Default to merge if the original name already exists (likely they're
+    // refreshing a shared pack), otherwise create-new.
+    const modeRadios = document.querySelectorAll('input[name="import-pack-mode"]');
+    modeRadios.forEach(r => { r.checked = r.value === 'new'; });
+
+    // Build a safe, escaped summary using textContent + DOM construction
+    // rather than innerHTML so imported text can never become markup.
+    importPackSummary.replaceChildren();
+    const intro = document.createElement('div');
+    intro.style.marginBottom = '8px';
+    const label = document.createElement('strong');
+    label.textContent = 'From pack: ';
+    intro.appendChild(label);
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = payload.name;
+    intro.appendChild(nameSpan);
+    importPackSummary.appendChild(intro);
+
+    const stats = document.createElement('ul');
+    stats.className = 'import-pack-stats';
+    const li = (text) => { const el = document.createElement('li'); el.textContent = text; return el; };
+    stats.appendChild(li(`${payload.videos.length} tagged video${payload.videos.length !== 1 ? 's' : ''}`));
+    stats.appendChild(li(`${payload.playlists.length} playlist${payload.playlists.length !== 1 ? 's' : ''}`));
+    stats.appendChild(li(`${payload.liveGeneratedPlaylists.length} live-generated playlist${payload.liveGeneratedPlaylists.length !== 1 ? 's' : ''}`));
+    importPackSummary.appendChild(stats);
+
+    setImportError(null);
+    importPackModal.classList.remove('hidden');
+    updateImportConflictState();
+  }
+
+  function closeImportPackModal() {
+    importPackModal.classList.add('hidden');
+    pendingImport = null;
+    setImportError(null);
+    importPackFileInput.value = '';
+  }
+
+  async function handleImportFile(file) {
+    if (!file) return;
+    if (file.size > MAX_ZIP_BYTES) {
+      alert('Selected file exceeds the import size limit.');
+      return;
+    }
+    try {
+      const buf = new Uint8Array(await file.arrayBuffer());
+      const entries = await zipRead(buf, ['manifest.json', 'pack.json']);
+      const packBytes = entries.get('pack.json');
+      if (!packBytes) {
+        throw new Error('Zip does not contain pack.json.');
+      }
+      if (packBytes.length > MAX_JSON_BYTES) {
+        throw new Error('pack.json exceeds the JSON size limit.');
+      }
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(packBytes);
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch (e) {
+        throw new Error('pack.json is not valid JSON: ' + e.message);
+      }
+      // (manifest.json is informational; we don't trust it. Validate
+      // against pack.json's own format/version markers.)
+      const payload = sanitizePackPayload(parsed);
+      openImportPackModal(payload);
+    } catch (e) {
+      console.error('handleImportFile failed:', e);
+      alert('Could not import this pack file: ' + (e && e.message ? e.message : e));
+      importPackFileInput.value = '';
+    }
+  }
+
+  async function applyImport() {
+    if (!pendingImport) return;
+    const targetName = importPackNameInput.value.trim();
+    const mode = document.querySelector('input[name="import-pack-mode"]:checked')?.value || 'new';
+    if (!targetName || !PACK_NAME_RE.test(targetName) || targetName.length > 50) {
+      setImportError('Pack name contains disallowed characters or is too long.');
+      return;
+    }
+    const exists = allPacks.some(p => p.toLowerCase() === targetName.toLowerCase());
+    if (mode === 'new' && exists) {
+      setImportError(`A pack named "${targetName}" already exists.`);
+      return;
+    }
+    if (mode === 'merge' && !exists) {
+      setImportError(`No pack named "${targetName}" exists yet.`);
+      return;
+    }
+
+    confirmImportPackBtn.disabled = true;
+    try {
+      // Read full storage once so we can merge cleanly.
+      const data = await chrome.storage.local.get(null);
+
+      // Ensure the pack exists in allPacks.
+      if (!exists) {
+        allPacks.push(targetName);
+      }
+
+      // Merge videos. Never overwrite existing tags/ratings/feedback —
+      // just extend the `packs` list when a URL is already known.
+      const updates = {};
+      let videosCreated = 0;
+      let videosMerged = 0;
+      for (const v of pendingImport.videos) {
+        const key = 'video_' + v.url;
+        const existing = data[key];
+        if (existing && typeof existing === 'object') {
+          const packs = getItemPacks(existing).slice();
+          if (!packs.includes(targetName)) {
+            packs.push(targetName);
+            // eslint-disable-next-line no-unused-vars
+            const { pack: _legacyPack, ...rest } = existing;
+            updates[key] = { ...rest, packs };
+            videosMerged++;
+          }
+        } else {
+          const fresh = {
+            title: v.title || v.url,
+            tags: v.tags,
+            ratings: v.ratings || {},
+            packs: [targetName],
+          };
+          if (typeof v.feedback === 'string') fresh.feedback = v.feedback;
+          if (typeof v.duration === 'number') fresh.duration = v.duration;
+          updates[key] = fresh;
+          videosCreated++;
+        }
+      }
+
+      // Merge playlists: always add as new entries with fresh IDs so we
+      // never collide with the user's existing playlist IDs.
+      const existingPlaylists = Array.isArray(data.playlists) ? data.playlists.slice() : [];
+      let nextIdTick = Date.now();
+      for (const p of pendingImport.playlists) {
+        existingPlaylists.push({
+          id: String(nextIdTick++),
+          name: p.name,
+          videos: p.videos,
+          createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
+          packs: [targetName],
+        });
+      }
+
+      const existingLgps = Array.isArray(data.liveGeneratedPlaylists) ? data.liveGeneratedPlaylists.slice() : [];
+      for (const p of pendingImport.liveGeneratedPlaylists) {
+        existingLgps.push({
+          id: String(nextIdTick++),
+          name: p.name,
+          filters: p.filters,
+          createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
+          packs: [targetName],
+        });
+      }
+
+      // Single write with everything merged.
+      const writeBatch = { ...updates };
+      writeBatch.packs = allPacks;
+      writeBatch.playlists = existingPlaylists;
+      writeBatch.liveGeneratedPlaylists = existingLgps;
+      await chrome.storage.local.set(writeBatch);
+
+      allPlaylists = existingPlaylists;
+      allLiveGeneratedPlaylists = existingLgps;
+
+      closeImportPackModal();
+      await loadPacks();
+      await loadAllVideos();
+      alert(
+        `Imported pack "${targetName}": ` +
+        `${videosCreated} new video${videosCreated !== 1 ? 's' : ''}, ` +
+        `${videosMerged} existing video${videosMerged !== 1 ? 's' : ''} re-tagged, ` +
+        `${pendingImport.playlists.length} playlist${pendingImport.playlists.length !== 1 ? 's' : ''}, ` +
+        `${pendingImport.liveGeneratedPlaylists.length} live-generated playlist${pendingImport.liveGeneratedPlaylists.length !== 1 ? 's' : ''}.`
+      );
+    } catch (e) {
+      console.error('applyImport failed:', e);
+      setImportError('Import failed: ' + (e && e.message ? e.message : e));
+      confirmImportPackBtn.disabled = false;
+    }
+  }
+
+  importPackBtn.addEventListener('click', () => {
+    importPackFileInput.click();
+  });
+  importPackFileInput.addEventListener('change', async () => {
+    const file = importPackFileInput.files && importPackFileInput.files[0];
+    importPackFileInput.value = '';
+    await handleImportFile(file);
+  });
+  closeImportPackModalBtn.addEventListener('click', closeImportPackModal);
+  cancelImportPackBtn.addEventListener('click', closeImportPackModal);
+  confirmImportPackBtn.addEventListener('click', applyImport);
+  importPackNameInput.addEventListener('input', updateImportConflictState);
+  document.querySelectorAll('input[name="import-pack-mode"]').forEach(r => {
+    r.addEventListener('change', updateImportConflictState);
+  });
 
   // ==================== EVENT LISTENERS ====================
 
