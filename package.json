@@ -1,0 +1,11 @@
+{
+  "name": "customcuts-extension-tooling",
+  "private": true,
+  "description": "Build/sign tooling for the CustomCuts browser extension. Not shipped to users.",
+  "scripts": {
+    "sign": "web-ext sign --source-dir build/firefox --artifacts-dir web-ext-artifacts --channel unlisted"
+  },
+  "devDependencies": {
+    "web-ext": "^8.3.0"
+  }
+}

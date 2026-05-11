@@ -23,6 +23,9 @@ Usage:
 """
 import argparse
 import json
+import os
+import shutil
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -45,6 +48,10 @@ TARGETS = {
     'chrome':  SCRIPT_DIR / 'customcuts-chrome.zip',
     'firefox': SCRIPT_DIR / 'customcuts-firefox.zip',
 }
+
+# Staging dir for `web-ext sign` — it signs a source directory, not a zip.
+FIREFOX_BUILD_DIR = SCRIPT_DIR / 'build' / 'firefox'
+WEB_EXT_ARTIFACTS_DIR = SCRIPT_DIR / 'web-ext-artifacts'
 
 # Stable Firefox extension ID. Used by install.py to register the native host
 # under the Mozilla NativeMessagingHosts key with `allowed_extensions`.
@@ -120,6 +127,69 @@ def build_zip(out_path: Path, manifest_data: dict,
     print(f'wrote {out_path.name}  ({n} files, {label})')
 
 
+def build_dir(out_dir: Path, manifest_data: dict,
+              source_files: list[tuple[str, Path]], label: str) -> None:
+    """Materialize the same payload as build_zip but as an unpacked directory.
+
+    web-ext signs a source directory, not a zip — it rebuilds the zip itself
+    and then calls the AMO signing API. We stage Firefox builds here so the
+    Firefox-specific manifest is the one that gets signed.
+    """
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
+    n = 0
+    (out_dir / 'manifest.json').write_text(json.dumps(manifest_data, indent=2))
+    n += 1
+    for arc, full in source_files:
+        if arc == 'manifest.json':
+            continue
+        dest = out_dir / arc
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(full, dest)
+        n += 1
+    print(f'staged {out_dir.relative_to(SCRIPT_DIR)}/  ({n} files, {label})')
+
+
+def sign_firefox(source_dir: Path, channel: str) -> int:
+    """Invoke `npx web-ext sign` against a staged Firefox source directory.
+
+    Credentials come from env vars AMO_JWT_ISSUER / AMO_JWT_SECRET (generate
+    them at https://addons.mozilla.org/developers/addon/api/key/). The signed
+    .xpi lands in web-ext-artifacts/.
+    """
+    issuer = os.environ.get('AMO_JWT_ISSUER')
+    secret = os.environ.get('AMO_JWT_SECRET')
+    if not issuer or not secret:
+        print('error: AMO_JWT_ISSUER and AMO_JWT_SECRET must be set in the '
+              'environment. Generate a key pair at '
+              'https://addons.mozilla.org/developers/addon/api/key/',
+              file=sys.stderr)
+        return 2
+
+    npx = shutil.which('npx')
+    if not npx:
+        print('error: npx not found on PATH. Install Node.js and run '
+              '`npm install` from the repo root to pin web-ext.',
+              file=sys.stderr)
+        return 2
+
+    WEB_EXT_ARTIFACTS_DIR.mkdir(exist_ok=True)
+    cmd = [
+        npx, '--yes', 'web-ext', 'sign',
+        '--source-dir', str(source_dir),
+        '--artifacts-dir', str(WEB_EXT_ARTIFACTS_DIR),
+        '--channel', channel,
+        '--api-key', issuer,
+        '--api-secret', secret,
+    ]
+    print(f'running: npx web-ext sign --channel {channel} ...')
+    # cwd=SCRIPT_DIR so a local node_modules/.bin/web-ext (if `npm install`
+    # was run) is preferred over fetching a fresh copy.
+    result = subprocess.run(cmd, cwd=str(SCRIPT_DIR))
+    return result.returncode
+
+
 def bump_version(manifest_path: Path, manifest: dict, *, segment: str) -> dict:
     """Bump major.minor.patch in-place and persist to disk.
 
@@ -154,7 +224,16 @@ def main() -> int:
                         help='skip the auto version bump on Firefox builds')
     parser.add_argument('--minor', action='store_true',
                         help='bump the minor segment instead of patch (default) on Firefox builds')
+    parser.add_argument('--sign', action='store_true',
+                        help='after the Firefox build, run `npx web-ext sign` to upload to AMO. '
+                             'Requires AMO_JWT_ISSUER + AMO_JWT_SECRET in the environment.')
+    parser.add_argument('--channel', choices=['listed', 'unlisted'], default='unlisted',
+                        help='web-ext sign channel: unlisted signs for self-distribution (default), '
+                             'listed publishes to the public AMO catalog')
     args = parser.parse_args()
+
+    if args.sign and args.target == 'chrome':
+        parser.error('--sign only applies to Firefox builds')
 
     manifest_path = SCRIPT_DIR / 'manifest.json'
     with open(manifest_path) as f:
@@ -175,6 +254,11 @@ def main() -> int:
     if args.target in ('firefox', 'both'):
         firefox_manifest = transform_manifest_for_firefox(chrome_manifest)
         build_zip(TARGETS['firefox'], firefox_manifest, files, 'firefox')
+        if args.sign:
+            build_dir(FIREFOX_BUILD_DIR, firefox_manifest, files, 'firefox')
+            rc = sign_firefox(FIREFOX_BUILD_DIR, channel=args.channel)
+            if rc != 0:
+                return rc
 
     return 0
 

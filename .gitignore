@@ -23,6 +23,12 @@ customcuts-roku.zip
 customcuts-chrome.zip
 customcuts-firefox.zip
 
+# web-ext sign tooling: npm-installed deps, the staged source dir we hand
+# to web-ext, and the signed .xpi web-ext drops there. All regenerable.
+node_modules/
+build/
+web-ext-artifacts/
+
 # Native host generated caches (thumbnails for featured grid, transmuxed MP4s)
 native_host/thumbs/
 native_host/transmux_cache/

@@ -114,6 +114,46 @@ Access via the extension's **Options** page:
 - **Popup** — Configure which panels appear in the popup
 - **Data** — Export, import, or clear all extension data
 
+## Publishing the Firefox Extension
+
+CustomCuts ships as a self-distributed (unlisted) signed XPI. AMO signs
+the build but does not list it in the public catalog. Signing goes through
+Mozilla's `web-ext` CLI.
+
+### One-time setup
+
+1. Install Node.js (any LTS version).
+2. From the repo root, install the pinned `web-ext`:
+   ```bash
+   npm install
+   ```
+3. Generate an AMO API key pair at
+   <https://addons.mozilla.org/developers/addon/api/key/> and export both
+   values in the shell you'll publish from:
+   ```bash
+   export AMO_JWT_ISSUER=user:12345:67           # PowerShell: $env:AMO_JWT_ISSUER = "..."
+   export AMO_JWT_SECRET=abc123...
+   ```
+   Keep these out of git — they grant full account access.
+
+### Publishing a new version
+
+```bash
+python build_extension.py --target firefox --sign
+```
+
+This bumps the patch segment, rebuilds `customcuts-firefox.zip`, stages
+`build/firefox/` for `web-ext`, and submits the build to AMO for unlisted
+signing. The signed XPI lands in `web-ext-artifacts/` — distribute that
+file directly to users.
+
+Flags:
+- `--minor` — bump minor instead of patch (`1.2.3 → 1.3.0`).
+- `--no-bump` — re-run a build at the current version (AMO will reject a
+  duplicate-version upload, so only useful for retrying a failed sign).
+- `--channel listed` — opt in to publishing on the public AMO catalog
+  instead of the default self-distribution flow.
+
 ## Uninstalling the Native Host
 
 ```bash
