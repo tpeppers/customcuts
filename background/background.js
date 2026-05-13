@@ -47,7 +47,8 @@ const DEFAULT_SETTINGS = {
     position: 'bottom-center'  // 'bottom-center', 'bottom-left', 'bottom-right'
   },
   obeyVolumeTags: true,
-  autoSkipIntro: false
+  autoSkipIntro: false,
+  autoNext: false
 };
 
 // Native messaging host name

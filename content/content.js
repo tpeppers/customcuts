@@ -108,6 +108,7 @@
 
   // Auto skip intro/ad state
   let autoSkipIntroEnabled = false;
+  let autoNextEnabled = false;
   let autoSkipObserver = null;
   let autoSkipIntervalId = null;
   // Sites obscure these buttons with rotating class names, so we mix specific
@@ -128,6 +129,14 @@
     '.skip-button',
   ];
   const AUTO_SKIP_TEXT_RE = /^\s*skip\s+(intro|ad(?:vert(?:isement)?)?s?|recap|credits|opening|preview)\s*$/i;
+  // Next-episode selectors (AutoNext). Netflix exposes a stable data-uia hook
+  // on the seamless next-episode button at end-of-episode.
+  const AUTO_NEXT_SELECTORS = [
+    // Netflix
+    '[data-uia="next-episode-seamless-button"]',
+    '[data-uia="next-episode-button"]',
+  ];
+  const AUTO_NEXT_TEXT_RE = /^\s*next\s+episode\s*$/i;
   // Cooldown: don't re-attempt the same element more often than every 1.5s.
   // We used to permanently blacklist clicked elements, but that loses to
   // YouTube's countdown — the button exists during the 5s unskippable phase
@@ -1885,6 +1894,7 @@
       popTagStyle = response.popTagStyle || {};
       obeyVolumeTags = response.obeyVolumeTags !== false;
       setAutoSkipIntroEnabled(response.autoSkipIntro === true);
+      setAutoNextEnabled(response.autoNext === true);
 
       // Initialize sound player
       if (!soundPlayer) {
@@ -2026,22 +2036,48 @@
     }
   }
 
+  function scanForNextEpisode(root) {
+    if (!autoNextEnabled) return;
+    const scope = root && root.querySelectorAll ? root : document;
+    for (const sel of AUTO_NEXT_SELECTORS) {
+      const matches = scope.querySelectorAll(sel);
+      for (const el of matches) {
+        if (tryClickAutoSkip(el)) return;
+      }
+    }
+    // Text fallback for renamed selectors. Constrain to buttons so we don't
+    // walk every span on the page.
+    const candidates = scope.querySelectorAll('button, [role="button"]');
+    for (const el of candidates) {
+      const text = (el.textContent || '').trim();
+      if (!text || text.length > 40) continue;
+      if (AUTO_NEXT_TEXT_RE.test(text)) {
+        if (tryClickAutoSkip(el)) return;
+      }
+    }
+  }
+
+  function scanAutoActions(root) {
+    if (autoSkipIntroEnabled) scanForSkipButtons(root);
+    if (autoNextEnabled) scanForNextEpisode(root);
+  }
+
   function startAutoSkipObserver() {
     if (autoSkipObserver || !document.body) return;
     autoSkipObserver = new MutationObserver((mutations) => {
-      if (!autoSkipIntroEnabled) return;
+      if (!autoSkipIntroEnabled && !autoNextEnabled) return;
       for (const m of mutations) {
         for (const node of m.addedNodes) {
           if (node.nodeType === Node.ELEMENT_NODE) {
-            scanForSkipButtons(node);
+            scanAutoActions(node);
           }
         }
       }
     });
     autoSkipObserver.observe(document.body, { childList: true, subtree: true });
-    autoSkipIntervalId = setInterval(() => scanForSkipButtons(document), 2000);
+    autoSkipIntervalId = setInterval(() => scanAutoActions(document), 2000);
     // Initial sweep — the button may already be on screen when we turn on.
-    scanForSkipButtons(document);
+    scanAutoActions(document);
   }
 
   function stopAutoSkipObserver() {
@@ -2060,7 +2096,14 @@
   function setAutoSkipIntroEnabled(enabled) {
     if (autoSkipIntroEnabled === enabled) return;
     autoSkipIntroEnabled = enabled;
-    if (enabled) startAutoSkipObserver();
+    if (autoSkipIntroEnabled || autoNextEnabled) startAutoSkipObserver();
+    else stopAutoSkipObserver();
+  }
+
+  function setAutoNextEnabled(enabled) {
+    if (autoNextEnabled === enabled) return;
+    autoNextEnabled = enabled;
+    if (autoSkipIntroEnabled || autoNextEnabled) startAutoSkipObserver();
     else stopAutoSkipObserver();
   }
 
@@ -2476,6 +2519,11 @@
 
       case 'setAutoSkipIntro':
         setAutoSkipIntroEnabled(message.enabled === true);
+        sendResponse({ success: true });
+        break;
+
+      case 'setAutoNext':
+        setAutoNextEnabled(message.enabled === true);
         sendResponse({ success: true });
         break;
 

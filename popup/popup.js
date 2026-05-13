@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const learnPatternBtn = document.getElementById('learn-pattern-btn');
   const learnPatternStatus = document.getElementById('learn-pattern-status');
   const autoSkipIntroToggle = document.getElementById('auto-skip-intro-toggle');
+  const autoNextToggle = document.getElementById('auto-next-toggle');
 
   // Pattern state (session-level, not persisted per-video)
   let allPatterns = [];
@@ -460,14 +461,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
 
-    // Load obeyVolumeTags + autoSkipIntro from global settings
+    // Load obeyVolumeTags + autoSkipIntro + autoNext from global settings
     try {
       const settings = await chrome.runtime.sendMessage({ action: 'getSettings' });
       obeyVolumeTagsToggle.checked = settings.obeyVolumeTags !== false;
       autoSkipIntroToggle.checked = settings.autoSkipIntro === true;
+      autoNextToggle.checked = settings.autoNext === true;
     } catch (e) {
       obeyVolumeTagsToggle.checked = true; // Default to on
       autoSkipIntroToggle.checked = false; // Default to off (opt-in)
+      autoNextToggle.checked = false; // Default to off (opt-in)
     }
   }
 
@@ -1381,6 +1384,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.tabs.sendMessage(currentTab.id, {
       action: 'setAutoSkipIntro',
       enabled: autoSkipIntroToggle.checked
+    });
+  });
+
+  autoNextToggle.addEventListener('change', async () => {
+    const settings = await chrome.runtime.sendMessage({ action: 'getSettings' });
+    settings.autoNext = autoNextToggle.checked;
+    await chrome.runtime.sendMessage({ action: 'saveSettings', settings });
+    chrome.tabs.sendMessage(currentTab.id, {
+      action: 'setAutoNext',
+      enabled: autoNextToggle.checked
     });
   });
 
